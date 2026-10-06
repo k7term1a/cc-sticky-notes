@@ -1,0 +1,19 @@
+{
+  "name": "cc-sticky-notes",
+  "version": "0.1.0",
+  "author": { "name": "Kai Chi" },
+  "description": "cc-sticky-notes: route curiosity questions to a side pane instead of the main conversation",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "routeThreshold": { "type": "number", "title": "Route threshold", "default": 0.6, "description": "Minimum Jev confidence before asking the user" },
+    "followupThreshold": { "type": "number", "title": "Follow-up threshold", "default": 0.6, "description": "Minimum is_followup confidence to attach under the active thread" },
+    "summaryProvider": { "type": "string", "title": "Summary provider", "default": "claude", "options": ["claude", "openai"], "description": "claude | openai — which model does titles, summaries, outlines and the knowledge side path" },
+    "claudeModel": { "type": "string", "title": "Claude model", "default": "haiku", "description": "Model for $.model.complete when summaryProvider is claude" },
+    "claudeEffort": { "type": "string", "title": "Claude effort", "default": "low", "options": ["low", "medium", "high", "xhigh", "max"], "description": "Effort for $.model.complete when summaryProvider is claude" },
+    "openaiModel": { "type": "string", "title": "OpenAI model", "default": "gpt-5-mini", "description": "OpenAI model for the summary layer" },
+    "openaiContextMode": { "type": "string", "title": "OpenAI context mode", "default": "redacted", "options": ["off", "redacted", "full"], "description": "off | redacted | full — what project content may be sent to OpenAI" },
+    "openaiDailyTokenCap": { "type": "number", "title": "OpenAI daily token cap", "default": 2000000, "description": "Pause OpenAI calls past this many tokens per UTC day" },
+    "autoOpenPane": { "type": "boolean", "title": "Auto-open pane", "default": false, "description": "Open the pane automatically when a sidebar answer arrives" },
+    "contextIndexMaxTokens": { "type": "number", "title": "Context index max tokens", "default": 300, "description": "Token budget for the title index injected via prompt.context (M3)" }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "cc-sticky-probe",
+  "version": "0.0.1",
+  "description": "M0 probe for cc-sticky-notes: logs what the Mods API really does",
+  "author": { "name": "Kai Chi" }
+}
