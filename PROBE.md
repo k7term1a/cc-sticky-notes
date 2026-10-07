@@ -21,6 +21,62 @@
 
 ---
 
+## Remote Control（10/07 下午）
+
+情境：mod 裝在 A（Windows，Claude Desktop 開 Remote Control），session 在 A 上跑；在 B 的 Claude Desktop 打開 A 的這個 session、從 B 打字。探針是暫時加在正式 mod 裡的 `/rcprobe`（commit `73440b0`，探完已移除），紀錄寫在 A 的 `$.store` `rcprobe:log`。Claude Code 2.1.289。
+
+### 1. 型別檔（2.1.289）
+
+- **`session.attach`**：「Fires when a remote client joins the session's roster of attached surfaces: it said so (ui_attach), or it first asked to draw.」只供觀察，`next(e)` 回 `{ clientId }`。
+  - `SessionAttachInput = { surface: RenderSurface; clientId: string /* 沒自報名稱時是 '<surface>:default' */; viewport?: RenderViewport }`
+- **`session.detach`**：client 離開 roster 時（它自己離開，或 session 結束時它還接著）。
+  - `SessionDetachInput = { surface; clientId; reason: 'detach' | 'end' }`；`reason: 'end'` 時跑在 `session.end` 的短時限內。
+- **`$.session.surfaces()`**：「every surface the session draws on, each once: `terminal` under the REPL first, then the remote ones in the order they attached」，`-p` 時是空陣列，不會 reject。`RenderSurface = 'terminal' | 'desktop' | 'mobile' | 'vscode'`。
+- **`prompt.submit` 的 `origin.kind`**（共 16 種）：`composer`（本機輸入框按 Enter）、`bridge`（「The user's message through the Remote Control bridge (a phone or web client)」）、`sdk`、`task-notification`、`scheduled-trigger`、`peer`、`peer-send-message`、`projects-relay`、`channel`（加 `server`）、`coordinator`、`observer`、`observer-activity`、`auto-continuation`、`unclassified`、`slack-ping`、`plugin`（加 `name`，`asUser?`）。
+- **`prompt.submit` 與 settings hook 的順序**：「`next(e)` runs the hooks beneath and the UserPromptSubmit settings hooks」。所以 `classic.UserPromptSubmit` 在 `prompt.submit` 的 `next` **裡面**；`{ drop }` 會讓它根本不執行。
+- **`ClassicResult`** 中 UserPromptSubmit 會讀的欄位：`block`、`preventContinuation`、`stopReason`（所有事件共用），加上 `additionalContext`、`sessionTitle`、`suppressOriginalPrompt?: true`（註解只寫「`hookSpecificOutput.suppressOriginalPrompt` (UserPromptSubmit, UserPromptExpansion)」，沒說效果）。
+- **`classic.UserPromptSubmit` 的 `e`**：`session_id, transcript_path, cwd, scratchpad_dir, prompt_id, permission_mode, agent_id, agent_type, effort, hook_event_name, prompt, session_title`；型別裡的 `source`（`user | sdk | system | loop_wakeup | schedule_wakeup | poll_event`）註明「Payloads may omit it while the field rolls out」。
+- **AskUserQuestion 工具**的選項有 `label`、`description`、`preview`；但 `$.ui.ask` 只接受 `options`（標籤字串）、`header`、`multiSelect`。
+
+### 2–5. 實測
+
+| # | 項目 | 結果 |
+| --- | --- | --- |
+| 2 | B 接上時的 `session.attach` | ✅ **沒有觸發**。整段只記到一次 `session.detach { surface: 'desktop', clientId: 'desktop-2', reason: 'detach' }`（看起來是 A 自己的 Desktop 視窗重連）。`$.session.surfaces()` 只出現過 `[]` 和 `['desktop']`：B 不在 surface roster 裡，Remote Control 的 B 不是「畫面 client」 |
+| 2 | 從 B 送出的 `origin.kind` | ✅ **`bridge`**（13 次全部）；在 A 打字是 **`composer`**。其他欄位相同（`text, wait, origin`；idle 時沒有 `turnId`）；`/rcprobe on` 從 B 下的指令 origin 也是 `bridge` |
+| 2 | settings hook 這層分得出來嗎 | ✗ `classic.UserPromptSubmit` 的 `source` 在 A、B 都是缺的（null），只能靠 `prompt.submit` 的 `origin.kind` 判斷 |
+| 3 | `suppressOriginalPrompt` | ✅ **模型照樣讀得到**：這句在 session 檔是普通的 user 訊息（非 meta），探針附的 `additionalContext`（KIWI42）也一起送到模型。B 上這句有顯示（A 未回報）。它沒有把 prompt 從 context 拿掉，不能取代 `{ drop }` |
+| 3 | `block`（classic） | ✅ 引擎把它轉成 `prompt.submit` 的 `{ drop: "UserPromptSubmit operation blocked by hook:\n<reason>\n\nOriginal prompt: <原文>" }`，session 檔一行 `system/informational/warning`，和 `{ drop }` 同一種。**A 顯示被擋，B 什麼都沒有** |
+| 3 | `{ drop }`（現在的做法） | ✅ 同上：**A 顯示，B 什麼都沒有**，B 上看起來像話被吞掉 |
+| 4 | idle 時從 `$.clock.after` 呼叫 `$.ui.ask` | ✅ **A、B 都跳出對話框**，B 可以作答（你用「Other」打字回答，50 秒後 A 收到 `"A 跟 B 都有，都看得到問號"`） |
+| 4 | 問題 300 字 | ✅ **沒有截斷**（每 50 字一個〔標記〕，看得到結尾的「？」）；更長的上限沒測 |
+| 4 | ⚠ 副作用 | ✅ 這次 B 上留下被 drop 的那句 `rcprobe-ask` 的訊息泡泡，加上一個**一直轉的回應中圖示**（3 分鐘以上還在轉）。只有走 `$.ui.ask` 的這次會；單純 block / drop 的兩次沒有 |
+| 4 | 用 `$.tool.call({ tool: 'AskUserQuestion' })` 帶 preview | ✅ **被引擎拒絕**：「tool.call: runs the AskUserQuestion tool: that is $.ui.ask (host check)」。plugin 只能走 `$.ui.ask`，沒有 `description` / `preview`，B 上只看得到問題文字與選項標籤 |
+| 5 | B 上的 `e.surface` | ✅ 所有 `ui.render` 都來自 `desktop`（A）；**B 從來沒有要求 mod 畫任何東西**，沒出現 `mobile` 或其他值 |
+| 5 | AbovePrompt | ✅ A 有（`[rcprobe AbovePrompt] surface=desktop`），**B 沒有** |
+| 5 | 狀態列（`$.ui.status`） | ✅ A 有（`cc-sticky-note CRDT衝突合併`），**B 沒有** |
+| 5 | PromptHint | ✅ **A、B 都沒有**，A 的 Desktop 也從未要求繪製 PromptHint（型別檔說 desktop 會發，2.1.289 的 Desktop 實際上沒有；這也是先前 ui-demo 的 C 一直沒出現的原因） |
+| — | 便利貼的 `$.ui.log` 灰字、toast、pane | ⏳ 這次沒有單獨測 B 上看不看得到灰字；依「B 不畫 mod 任何東西」推測看不到，toast / pane 依文件只在 A |
+
+### ⚠ 偏離計畫
+
+- **RC1｜從 B 送出、被判成便利貼的 prompt，B 完全不知道。** `{ drop }` 的提示（以及 classic `block`）只出現在 A；mod 自己畫的狀態列、pane、toast 也都只在 A。PLAN 的成功標準 1「畫面上只有一行『→ 便利貼』」在 B 上不成立：B 上只會看到話不見了。
+- **RC2｜`suppressOriginalPrompt` 不能當「不進主線」用。** 模型照樣讀到原句（以及附加的 context），它只是 settings hook 的一個欄位，對主線 context 沒有我們要的效果。
+- **RC3｜答案不能以排版形式送到 B。** 能到 B 的只有 `$.ui.ask` 的問題文字（純文字，300 字內不截斷）與選項標籤；帶 `preview` 的 AskUserQuestion 被引擎擋下。
+- **RC4｜`$.ui.ask` 在 B 上留下「回應中」的轉圈。** 這是 RC1 唯一確定能到 B 的路，但用了之後 B 會以為有一個回合在跑、一直轉，直到下一個真的回合結束（推測）。
+
+### 建議（等你決定，沒有實作）
+
+用 `prompt.submit` 的 `origin.kind === 'bridge'` 判斷「這句來自遠端」，只對這類 prompt 改變行為；A 本機的行為不變。三個方向：
+
+| 方向 | B 上看到什麼 | 代價 |
+| --- | --- | --- |
+| **(a) 遠端一律先問** | Jev 判成便利貼時，先 `$.ui.ask`「cc-sticky-note：收成便利貼？(Jev 96%)」〔收成便利貼 / 送進主線〕；選便利貼才 drop，答案好了再用第二個 `$.ui.ask` 把**純文字答案**（前 ~300 字 + 「完整內容在 A 的 pane」）送到 B，選項〔收到 / 回流主線〕 | 每則多兩個對話框；RC4 的轉圈；答案沒有排版 |
+| **(b) 遠端只交付、不先問** | 照常 drop；答案好了用一個 `$.ui.ask` 把純文字答案送到 B，選項〔收到 / 回流主線 / 這句其實是任務〕 | B 送出後到答案出現前那幾秒，仍像話被吞掉；RC4 的轉圈 |
+| **(c) 遠端不攔** | `bridge` 來的 prompt 一律進主線（只記錄 Jev 的判斷供回饋），便利貼只在 A 本機使用 | B 上的旁問會進主線 context，失去這個 mod 的主要好處 |
+
+我傾向 **(b)**：比 (a) 少一個對話框，最後一個選項順便收集「分錯」的回饋（接上 D15 的回饋接口）。RC4 的轉圈要等你在 B 上實際看過可不可以接受。另外，答案字數上限（300 字以上會不會被截）可以再補一個探針。
+
 ## 〇之五、UI 位置定案（10/07 下午）
 
 - **Desktop 實測**（ui-demo 第一輪）：A 帶子、D 狀態列（輸入框下方右側、模型選單旁）、E 工作中列、G 回覆底下都有畫出來。B、C 第一輪改寫 props 的做法沒有出現；第二輪改成自己畫的 B2 / C2，你看得到 B2。F 第一輪因為 Desktop 每則訊息都被當成「已展開」而被跳過。
