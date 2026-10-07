@@ -1,0 +1,4 @@
+.env
+.env.*
+.cc-history/
+node_modules/

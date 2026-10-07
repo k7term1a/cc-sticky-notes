@@ -13,7 +13,7 @@
 | 執行方式 | `claude -p --plugin-dir probes/m0 --output-format stream-json --verbose "probe-…"`，cwd 在 scratchpad，避免在你的專案底下多出測試 session；從 stream-json 的 `ui_log` 讀結果，並直接打開 `~/.claude/projects/<cwd>/<id>.jsonl` 看 session 檔 |
 | 金鑰 | `TYPESAFE_API_KEY`、`OPENAI_API_KEY` 在本機 User / Machine / 本 session 環境都**未設定**（探針以 `$.env.get` 確認，只記有無，不記值） |
 
-**兩個阻礙**（細節在「待討論」）：
+**第一輪的兩個阻礙**（10/07 上午已排除，見第〇節）：
 1. 獨立 CLI 的 OAuth 已過期（`Failed to authenticate: OAuth session expired and could not be refreshed`），Desktop 的登入是 host 代管的，我沒有、也不該繞過它。所以**所有要打模型的實測（fork / complete / classify 的實際回答）都沒能跑**；hook 本身在模型之前執行，不打模型的探針都有跑。
 2. 沒有金鑰，Jev / OpenAI 只能驗證「端點可達、錯誤格式」，沒有成功呼叫。
 
@@ -21,28 +21,69 @@
 
 ---
 
+## 〇、第二輪實測（10/07 上午，CLI 已登入、金鑰已放進 `.env`）
+
+第一輪被擋住的探針都補跑了。下面各題標題的狀態已同步更新；這一節是摘要和新發現。
+
+**跑法調整**：你的 `~/.claude/settings.json` 現在用 `CLAUDE_CODE_PLUGIN_DIRS` 讓正式 mod 跟著每一個 `claude` 載入。跑探針時我加了 `--setting-sources project`，避免正式 mod 攔截 `probe-…` prompt。要讓 fork 有東西可以 fork，改用 `--input-format stream-json` 在**同一個行程**裡先跑一個正常 turn，再送探針 prompt，stdin 保持開著讓背景工作跑完。
+
+| 項目 | 結果 |
+| --- | --- |
+| fork 看得到主線嗎 | ✅ 先講「codename BLUEFIN、Postgres 16」，再 fork 問 → `ZEBRA7 BLUEFIN Postgres 16`。耗時 1.0–3.0 s，`cache_read_input_tokens` ≈ 39.6k（主線 prompt cache 命中），新輸入只有 31–85 tokens |
+| fork 答案會不會進 session 檔 | ✅ **不會**。三個 fork 的答案用「只出現在答案裡」的字（`hash function`、`drain`、`ZEBRA7 BLUEFIN`）grep session 檔，全部 0 筆；也沒有額外的 subagent 檔 |
+| 旁支歷史串進 prompt | ✅ `fork-history` 正確接續上一題（答到 Node stream 的 `write()` 回 false / `drain`） |
+| hook 裡 await fork 再 drop | ✅ 可以，hook 等了 1.0–3.0 s 才 drop，沒被判逾時（$ 呼叫不計時）。互動 session 下輸入框會不會因此卡住，要你在 Desktop 看 ⏳ |
+| drop 後在 `$.clock.after(0)` 裡 fork | ✅ 背景照常答完（1.8 s），正式 mod 用的就是這條路 |
+| ⚠ **新：resume 後的第一題不能 fork** | ✅ 用 `--resume` 接上一個有完整回答的 session，`session.messages()` 看得到回答，fork 卻回 `nothing-to-fork`。fork 重送的是「本行程主線最後送出的那個 request」，剛 resume、還沒跑過 turn 就沒有可重送的。→ P9 |
+| `$.model.complete` | ✅ haiku、`effort: 'low'`、有 `system`：1.5 s，55 in / 96 out tokens。回覆包在 ```json fence 裡（`digest.ts` 的 parser 本來就處理） |
+| `$.model.classify` | ✅ 「why does TCP need a three-way handshake」→ `sidebar_knowledge`，613 ms。沒有信心值（同第 4 題） |
+| Jev 實際呼叫 | ✅ 200，`jev-1.13.0`，**回應格式和 `jev.ts` 假設的完全一致**（`answers.route.{choice, confidence, probabilities}`、`answers.is_followup.noul`）。每次約 560 input / 123 output tokens，300–600 ms |
+| OpenAI 實際呼叫 | ✅ 200。⚠ `gpt-5-mini` 是推理模型：`max_completion_tokens: 400` 全被 reasoning 吃光，`content` 是空字串（`finish_reason: length`）。加上 `reasoning_effort: 'minimal'` 後 2.4 s、149 tokens、正確 JSON。M4 的 `providers/openai.ts` 要帶這個參數 |
+| 正式 mod 端到端 | ✅ 正常 turn → `/sticky-note new TCP 的 backpressure 是什麼原理？` → toast `→ 便利貼：…` → 背景 fork 回答 → 自動標題摘要 → toast `📌 TCP流量控制`。store 裡的節點欄位齊全，`anchor.turnId` 是前一個主線 turn、`mainSnippet` 正確 |
+| ⚠ **新：`/sticky-note new` 會把問題留在主線** | ✅ session 檔多了兩則 user row：一則 `isMeta` 的 `<local-command-caveat>…recorded here as context for later messages`，一則**非 meta** 的 `<command-name>/sticky-note</command-name>…<command-args>new TCP 的 backpressure 是什麼原理？</command-args>`。模型之後讀得到這個問題 → P10 |
+| 更正：`-p` 的 slash command | 第一輪說「`-p "/sticky-note …"` 不被辨識」是**錯的**。Git Bash 的 MSYS 路徑轉換把 `/sticky-note` 改成了 `C:/Program Files/Git/sticky-note`。關掉轉換後，單發 `-p "/sticky-note back"` 正常執行 |
+| 標題 / 摘要的語言 | 問題是繁體中文，haiku 寫出的摘要是**簡體**（「反压」「通过」），標題一次繁體一次簡體。`digest.ts` 的 system prompt 要明講「繁體中文」。小修，等你看完一起改 |
+
+**Jev 對六句典型 prompt 的判斷**（state 裡 active_thread 固定是 none）：
+
+| prompt | route | is_followup | needs_project_ctx | tag |
+| --- | --- | --- | --- | --- |
+| TCP 的 backpressure 是什麼原理？ | sidebar_knowledge 1.0 | 0.02 | 0.07 | network 1.0 |
+| 幫我把 login.ts 的 token 輪替寫完 | main_task 1.0 | 0.13 | 0.92 | __new__ 0.84 |
+| 為什麼我們這裡用 session cookie 而不是 JWT？ | **sidebar_knowledge 0.65** | 0.16 | 0.69 | __new__ 0.81 |
+| 好，就照你說的改 | main_task 1.0 | 0.10 | 0.62 | __new__ 0.93 |
+| 那 Node stream 的 highWaterMark 又是什麼？ | sidebar_knowledge 0.99 | 0.03 | 0.09 | __new__ 0.96 |
+| what is the difference between pipe and pipeline in node | sidebar_knowledge 1.0 | 0.04 | 0.08 | __new__ 0.99 |
+
+第三句計畫書會期待 `project_question`，Jev 給 `sidebar_knowledge` 0.65，剛好過 0.6 門檻，會被 drop 進旁支（因為 ctx 0.69，答題走 fork）。這正是 M1 驗收要用 50 句真實 prompt 校正的地方，也可以考慮把 `project_question` 的描述寫得更具體。
+
+**金鑰的三件事**（沒有動你的 `.env`）：
+1. **兩把 key 放反了**：`TYPESAFE_API_KEY` 的值是 `sk-…` 開頭（OpenAI 的格式），`OPENAI_API_KEY` 是 `apikey_…`。照原樣兩邊都回 401；對調後兩邊都 200。
+2. `.env` 是 CRLF 換行、值有加引號。用 shell `source` 的話，第一行的值後面會多一個 `\r`。我的測試腳本是自己 parse（去掉 `\r` 和引號、對調兩個值）再丟給子行程。
+3. **mod 本身不讀 `.env`**，計畫書規定只從環境變數拿（`$.env.get`）。Desktop 啟動的 session 不會自動載入 repo 裡的 `.env`。→ 待討論 D14
+
 ## 一、PLAN「風險、未知與要先驗證的事」逐題
 
-### 1. `$.model.fork({ prompt })` 的答案會不會寫進 transcript 或 session 檔？ — 📄 不會；⏳ 實測待補
+### 1. `$.model.fork({ prompt })` 的答案會不會寫進 transcript 或 session 檔？ — ✅ 不會（第〇節）
 
 - 型別檔：`fork` 是「one tool-less completion over the session's OWN transcript as the main thread last sent it … with `prompt` after it: every tool denied, its own tail never cached」。它重送主線最後一次 request 再接上 prompt，沒有任何 append。
 - `session.append` 的文件列出了引擎會寫入對話的每一種 row（prompt、command、response、tool-result…），fork 不在其中。
 - 實測：只拿到 `{"isAnswered":false,"reason":"nothing-to-fork"}`（resume 的 session 只有一則 OAuth 失敗的合成 assistant 訊息，算「沒有可 fork 的回應」）。真正回答後去 grep session 檔這一步被 OAuth 擋住。
 - 補充（📄）：fork 用主線**同一個 model 與 system prompt**，請求沒有 `model` 欄位，旁答不能指定較便宜的模型。
 
-### 2. fork 能否帶 `system` 或額外 messages？ — 📄 不能 → 採 PLAN 備案
+### 2. fork 能否帶 `system` 或額外 messages？ — 📄 不能 → 採 PLAN 備案，✅ 實測可用
 
 - `ModelForkRequest = { prompt: string }`，只有這一欄。
 - 依 PLAN 備案，把旁支歷史串進 prompt 文字：`hooks/answer.ts` 的 `buildForkPrompt()`（前面一段 `[sticky-notes] … aside` 框架 + `[side thread so far] Q1/A1…` + `[question]`），有單元測試。
 
-### 3. fork 在 `prompt.submit` hook 裡呼叫、該 hook 回 `{ drop }`：算不算 turn 進行中？會不會卡住？ — 📄 部分；⏳ 實測待補
+### 3. fork 在 `prompt.submit` hook 裡呼叫、該 hook 回 `{ drop }`：算不算 turn 進行中？會不會卡住？ — ✅ 不會逾時、背景版也可行；⏳ 互動時 UI 是否卡住
 
 - 預算：`HookBudget.ms = 10_000`，但「the clock stops while a `next(e)` call or any `$` call of the hook's is in flight（`$.clock` wait excepted）」。所以 hook 裡 await fork 不會吃預算。
 - 中斷：fork 的 `aborted` 是「the turn whose hook forked was interrupted」。idle 時送出的 prompt 沒有 turn（見第 5 題，`turnId` 不存在），理論上不會被中斷。
 - 沒有實測「hook 內 await fork 時 UI 是否凍住」。**正式 mod 直接採 PLAN 備案**：先回 `{ drop }`，旁答在 `$.clock.after(0, …)` 裡做（`notes.ts` 的 `startNote` → `answerNote`）。理由是使用者送出後馬上看到 drop 的提示行，不用等 2–5 秒。這不改架構。
 - 注意（✅）：`-p` 模式下 hook 回 drop 後行程就結束，背景工作來不及跑。所以 headless 驗不到背景旁答，要在互動 session 驗。
 
-### 4. `$.model.classify` 的簽名與回傳 — 📄 確認；✅ 失敗路徑實測
+### 4. `$.model.classify` 的簽名與回傳 — 📄 確認；✅ 成功 / 失敗都實測
 
 ```ts
 classify: (text: string, labels: readonly string[], options?: { model?: string }) => Promise<string | undefined>
@@ -110,15 +151,15 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 | `prompt.submit` 能 `{ drop }` | ✅ 能，但有副作用 → ⚠ P2 |
 | fork 的回傳形狀 | 📄 `{ isAnswered: true, text, usage }` 或 `{ isAnswered: false, reason: 'api-error' (status, error) \| 'empty-reply' \| 'aborted' \| 'nothing-to-fork', usage? }`；永不 reject。`usage.cache_read_input_tokens` 表示主線 prompt cache 命中多少 |
 | `$.model.complete` | 📄 `{ model, prompt, system?, maxTokens? (預設 1024，上限 64000), effort?: 'low'\|'medium'\|'high'\|'xhigh'\|'max', timeoutMs? }`，有 `system`。PLAN 的 `claudeEffort` 合法值就是這五個（已寫進 `userConfig` 的 `options`） |
-| `$.http.fetch` 打 Jev | ✅ 可達：`POST https://api.typesafe.ai/v1/systemone` 無 key 回 `403 {"detail":{"error_type":"authentication_error","message":"Must supply an API key! …"}}`。⏳ 成功呼叫要 key |
-| `$.http.fetch` 打 OpenAI | ✅ 可達：`GET /v1/models` 無 key 回 `401 Missing bearer authentication`。⏳ 成功呼叫要 key |
+| `$.http.fetch` 打 Jev | ✅ 無 key 回 403、錯 key 回 401 `Cannot authenticate with the server`、正確 key 回 200（第〇節） |
+| `$.http.fetch` 打 OpenAI | ✅ 無 key 401、錯 key 401 `invalid_api_key`、正確 key 200（第〇節；注意 reasoning token） |
 | `$.http.fetch` 回傳 | ✅ `{ status, ok, headers, text }`（headers 是小寫 key 的物件） |
 | `$.session.messages()` 夠不夠做摘要 | ✅ 每則 `{ role, text, toolUses }`（user 可能另有 `toolResults`）。`text` 是 text blocks 串起來，**沒有時間戳、沒有 message id、沒有 turnId**，最多最新 4096 則。做主線摘要的文字夠用；要對應「哪一則」就不夠（P6）。`{ as: 'api' }` 可拿完整 content blocks |
 | `$.session.usage()` | ✅ `{ startedAt, context: { window }, rateLimits: [], cost: { usd } }`；`-p` 下 `rateLimits` 是空的。PLAN 的「訂閱用量 %」要在互動 session 再看 ⏳ |
 | `$.session.id()/root()/cwd()/version()` | ✅ 都有。`version` = `{ version: '2.1.288', base, builtAt }` |
 | `userConfig` | ✅ PLAN 的格式（`type/default/description`，加上 `title`）驗證通過；string 欄位可加 `options` 變成 `/config` 裡的下拉選單（`summaryProvider`、`claudeEffort`、`openaiContextMode` 已加） |
-| `-p` 的 slash command | ✅ `claude -p "/sticky-note …"` 不會被當成 plugin 指令，而是送去模型。prompt 在 `session.start` 註冊指令之前就被解析了（之後才出現 `commands_changed`）。只影響 headless，互動 session 的 `session.start` 會在第一句 prompt 前跑完（📄） |
-| Jev 的 request schema | 📄（第三方）console.typesafe.ai 對 WebFetch 回 403，官方文件讀不到。`jev.ts` 用的是 apidog.com 的 Jev 介紹文：`{ model: 'jev-latest', state, questions: { <id>: { type: 'choice'\|'noul'\|'score', instructions, criteria } } }` → `{ answers: { <id>: { type, choice, confidence, probabilities } \| { type: 'noul', noul } } }`。Noul 只回一個機率、沒有 confidence。**拿到 key 後要用 Playground 對一次** |
+| `-p` 的 slash command | ✅ **更正**：可以正常執行。第一輪的「不被辨識」是 Git Bash 把 `/sticky-note` 轉成 Windows 路徑造成的（第〇節） |
+| Jev 的 request schema | ✅ 實際呼叫的回應和第三方文章描述的格式一致（`jev-1.13.0`）；`jev.ts` 不用改 |
 
 ---
 
@@ -179,12 +220,23 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 ---
 
+### P9. resume 之後、跑第一個主線 turn 之前，fork 沒有東西可以 fork
+
+- **不一樣**：PLAN 假設 fork 隨時能拿「當下主線上下文」。實測 fork 只重送**本行程**主線最後送出的 request：剛開的 session、`/clear` 之後，以及 **resume / 重開 Desktop 之後還沒跑過 turn** 時，都回 `nothing-to-fork`（文件寫的「a resume that starts the conversation afresh」）。
+- **目前**：`answer.ts` 遇到 `nothing-to-fork` 就改走統整層供應者（不帶專案脈絡），節點的 `answeredBy` 會記成 `claude` / `openai`，不是 `claude-fork`。
+- **建議**：保留這個退路，另外二選一：(a) 在 pane 上標「無專案脈絡」；(b) 這種情況改用 PLAN 第 1 題的備案：`$.model.complete` + `$.session.messages()` 最近 N 則自己組 prompt（沒有 prompt cache，比較貴，但有脈絡）。
+
+### P10. `/sticky-note new <問題>` 會把問題留在主線 context
+
+- **不一樣**：PLAN 把它當「手動入口」，暗示和 Jev 路由一樣乾淨。實測 slash command 的紀錄（`<command-args>new <問題></command-args>`）是一則非 meta 的 user row，模型之後讀得到，只多了一段「這是使用者自己跑的指令」的 caveat。
+- **建議**：(a) 接受：問題本身很短，答案不會進主線；(b) 用 `session.append` hook 把這則 row 的 `<command-args>` 改寫成 `new (sticky note)`（文件允許改寫 text block，型別上可行，沒實測）；(c) 手動入口只保留 pane 的追問框。我傾向 (b)，請你決定。
+
 ## 四、待討論
 
 | # | 問題 | 我目前的處理 / 預設 | 需要你決定的 |
 | --- | --- | --- | --- |
-| D1 | 讓模型相關探針能跑：獨立 CLI 的 OAuth 過期 | 沒跑 fork / complete / classify 的實際回答 | 在終端機跑 `claude` → `/login` 讓獨立 CLI 能用；或允許我在 Desktop session 開 hot reload 跑（會跳「Enable hot reloading」對話框，要你按）。剩下要補的探針：fork 的答案是否進 session 檔、hook 內 await fork 是否凍住 UI、classify 的品質、背景旁答在互動 session 的完整流程 |
-| D2 | 金鑰 | 兩把都沒設；mod 照 PLAN 降級（缺 Jev → 問、缺 OpenAI → fork / Claude） | 設好 `TYPESAFE_API_KEY` / `OPENAI_API_KEY`（使用者環境變數；Desktop 要重啟才會繼承），我再補 Jev 與 OpenAI 的成功呼叫，並用 Jev Playground 對 schema |
+| D1 | ~~讓模型相關探針能跑~~ | ✅ 已解決（CLI 已登入），結果見第〇節 | 只剩互動 session 的 UI 卡頓 / 視覺 |
+| D2 | 金鑰 | `.env` 裡兩把 key 放反了，對調後兩邊都 200（第〇節） | 把 `.env` 的兩個值對調 |
 | D3 | **缺 Jev 時「全部走 `$.ui.ask`」= 每一句 prompt 都跳一次對話框**，太干擾 | 照 PLAN 實作（測試也照它寫） | 建議改成：缺 Jev → 預設主線，只有 `/sticky-note new` 和 pane 追問框能建 note；或缺 Jev 時用 `$.model.classify`（沒有信心值）當退路，只有它判 `sidebar_knowledge` 才問 |
 | D4 | P1 的 Ports 慣例 | 已實作，validate / tsc / test 全過 | 接受，或改成全部放進 register.ts |
 | D5 | P3 的 store 拆 key | 單一 key + 縮短窗口 | 要不要在 M1 就拆 |
@@ -192,10 +244,12 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 | D7 | `needs_project_ctx` 的門檻 | PLAN 沒寫，暫定 `≥ 0.5` 走 fork（`route.ts` 的 `NEEDS_CTX_AT`） | 要不要偏保守（例如 ≥ 0.3 就走 fork，少送外部） |
 | D8 | `project_question` 的「`promotedAt = now` 書籤節點」 | 只做了「`next` + context」，書籤節點留 TODO | 書籤節點要不要成為 `activeThread`（會讓下一句追問掛在它下面）？我傾向不要 |
 | D9 | 整合大綱時，某個舊大綱的成員全被搬走 | 刪掉這個空大綱（`createOutline`），會回 `moved` 讓 UI 提示 | PLAN 沒說；OK 嗎 |
-| D10 | `/sticky-note new <問題>` 的指令紀錄本身可能會進主線 context | 未驗證（`-p` 下指令不被辨識） | 若互動 session 驗出 slash command 的 record 會被模型讀到，`new` 就不是乾淨入口，pane 追問框才是 |
+| D10 | `/sticky-note new` 的指令紀錄會進主線 | ✅ 已驗證會進 → P10 | P10 選 (a)/(b)/(c) |
 | D11 | 命名 / 結構小差異 | `Node` → `TreeNode`（避免和全域名衝突）；新增 `hooks/ports.ts`、`hooks/notes.ts`（流程編排）、`hooks/providers/types.ts`；PLAN 的 `hooks/openai.ts` 先合併進 `providers/openai.ts` | 需要的話照 PLAN 拆回 `openai.ts`（client + 用量計數）與 `providers/openai.ts`（介面實作） |
 | D12 | PATH 上的 CLI 是 2.1.283 | 用 Desktop 內建的 2.1.288 | 要不要 `claude update`（README 已鎖 2.1.288） |
 | D13 | UI 骨架截圖 | 骨架已做（帶子一行 + pane 列表 / 答案 / 回到主線），test kit 在 terminal 與 desktop 都驗證通過 | 我這邊沒辦法在 Desktop 載入、截圖（見下）。請你載入後看一眼，我們再對齊外觀 |
+| D14 | mod 怎麼拿到金鑰 | PLAN：只從環境變數（`$.env.get`）。repo 裡的 `.env` 不會被 Desktop / `claude` 自動載入，所以現在 Desktop 裡跑的正式 mod 拿不到 key，會走「缺 Jev → 每句都問」（D3） | (a) 把兩把 key 設成 Windows 使用者環境變數（`setx`，重開 Desktop），維持 PLAN；(b) 讓 mod 在 `session.start` 用 `$.fs.read` 讀專案根目錄的 `.env`（和 PLAN「不寫進任何檔案」的精神衝突；`.env` 已加進 `.gitignore`）。我建議 (a) |
+| D15 | 「為什麼我們這裡用 session cookie」被判 sidebar 0.65 | 照 PLAN 門檻 0.6 會被 drop | M1 校正時一起處理，或先在 `project_question` 的描述裡加「提到『我們 / 這裡 / 這個專案』」的例子 |
 
 ---
 

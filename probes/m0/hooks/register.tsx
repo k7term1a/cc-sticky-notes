@@ -119,6 +119,64 @@ export const register: Register = on => {
         return { drop: 'cc-sticky-probe: http done' }
       }
 
+      case 'jev': {
+        // Real Jev call with the four PLAN.md questions; logs the raw response.
+        const key = await $.env.get('TYPESAFE_API_KEY')
+        if (!key) {
+          out('jev: no TYPESAFE_API_KEY')
+          return { drop: 'cc-sticky-probe: jev skipped' }
+        }
+        const prompt = rest || 'TCP 的 backpressure 是什麼原理？'
+        const body = {
+          model: 'jev-latest',
+          state: `[recent main-line context]\nuser: 把 auth 改成 session cookie\nassistant: 已改好，剩 token 輪替。\n\n[sidebar state]\nactive_thread_title: none\nactive_thread_last_question: none\nmain_turns_since_last_sidebar: 2\n\n[new prompt]\n${prompt}`,
+          questions: {
+            route: {
+              type: 'choice',
+              instructions: 'Where should the new prompt go?',
+              criteria: {
+                main_task: 'Advances the project: an instruction, a code change, or a decision about what Claude just did',
+                sidebar_knowledge: 'Asks about a principle, concept or background knowledge; does not ask Claude to change anything',
+                project_question: 'A question about this project itself whose answer belongs in the main conversation',
+              },
+            },
+            is_followup: { type: 'noul', instructions: 'Does the new prompt continue the topic of active_thread?' },
+            needs_project_ctx: { type: 'noul', instructions: "Does answering the new prompt require seeing the project's code or conversation?" },
+            tag: { type: 'choice', instructions: 'Which topic tag fits the new prompt?', criteria: { network: 'About network', db: 'About db', __new__: 'None of the existing tags fits' } },
+          },
+        }
+        const r = await $.http.fetch('https://api.typesafe.ai/v1/systemone', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+          body: JSON.stringify(body),
+        })
+        out(`jev ms=${await ms()} status=${r.status} text=${r.text.slice(0, 1500)}`)
+        return { drop: 'cc-sticky-probe: jev done' }
+      }
+
+      case 'openai': {
+        const key = await $.env.get('OPENAI_API_KEY')
+        if (!key) {
+          out('openai: no OPENAI_API_KEY')
+          return { drop: 'cc-sticky-probe: openai skipped' }
+        }
+        const r = await $.http.fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+          body: JSON.stringify({
+            model: rest || 'gpt-5-mini',
+            max_completion_tokens: 400,
+            reasoning_effort: 'minimal',
+            messages: [
+              { role: 'system', content: 'Reply with JSON only: {"title": "<=12 chars", "summary": "three sentences"}' },
+              { role: 'user', content: 'Q: What is TCP backpressure? A: When the receiver is slower, buffers fill and the sender slows down.' },
+            ],
+          }),
+        })
+        out(`openai ms=${await ms()} status=${r.status} text=${r.text.slice(0, 1500)}`)
+        return { drop: 'cc-sticky-probe: openai done' }
+      }
+
       case 'agents': {
         try {
           const r = await $.tool.call({ tool: 'ListAgents' })
