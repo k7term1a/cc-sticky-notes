@@ -20,6 +20,7 @@ type Fake = {
   toasts: string[]
   logs: string[]
   asked: () => number
+  opened: () => number
   runLater(): Promise<void>
   tree(): Promise<Tree>
   setSession(id: string): void
@@ -42,6 +43,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   let session = 'S1'
   let asked = 0
   let openaiCalls = 0
+  let opened = 0
   let now = 1000
   const state = { lastTurnId: 't0' as string | null, turnsAt: 0, pending: 0, unread: 0, lastSample: null as string | null }
   const messages: SessionMessage[] = [
@@ -84,7 +86,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
         if (opts.askAnswer === undefined) throw new Error('dismissed')
         return opts.askAnswer
       },
-      openPane: async () => {},
+      openPane: async () => void opened++,
       closePane: async () => {},
       isPaneOpen: async () => false,
       status: () => {},
@@ -113,6 +115,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     toasts,
     logs,
     asked: () => asked,
+    opened: () => opened,
     runLater: async () => {
       while (queue.length) {
         queue.shift()!()
@@ -220,6 +223,7 @@ describe('notes end to end (stubbed fork and complete)', () => {
     await f.runLater()
     expect((await f.tree()).nodes[id]).toMatchObject({ answer: 'answer #1', answeredBy: 'claude-fork', title: '標題', summary: '一。二。三。' })
     expect(f.toasts).toContain('cc-sticky-note 標題')
+    expect(f.opened()).toBe(1) // autoOpenPane is on by default
     expect(f.logs).toContain('cc-sticky-note 標題：一。二。三。　/sn 看完整答案')
     expect([...f.toasts, ...f.logs].join('')).not.toMatch(/\p{Extended_Pictographic}/u)
   })

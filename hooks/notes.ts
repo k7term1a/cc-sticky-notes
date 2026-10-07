@@ -39,7 +39,7 @@ export function readOptions(o: PluginOptions): Options {
     openaiModel: str(o.openaiModel, 'gpt-5-mini'),
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
-    autoOpenPane: o.autoOpenPane === true,
+    autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
   }
 }
 

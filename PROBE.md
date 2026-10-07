@@ -31,6 +31,10 @@
   - 拿掉所有 emoji：toast 與灰字改成「cc-sticky-note <標題>」，pane 標題改成「Sticky Notes」。
   - 詢問對話框：「這句要進主線還是旁支？(32%)」，百分比是 Jev 對它自己最高分那個路由的信心（低於門檻才會問）。
   - ui-demo 與 `uidemo.tsx` 已刪除。
+- **第二次試用後**（截圖：灰字裡是整段原始 Markdown）：
+  - `$.ui.log` 只能畫純文字，**不能渲染 Markdown**；對話裡能畫 Markdown 與按鈕的只有回覆底下（G，掛不上旁答）和指令輸出列（H，要由 mod 代跑指令，主線會多一行紀錄）。你選了不走 H。灰字改成一行無 Markdown 的預覽「cc-sticky-note <標題>：<摘要前 80 字>　/sn 看完整答案」，排版好的完整答案在 pane。
+  - 「Prompt blocked by a hook」這個標題是 Desktop 自己畫的，mod 改不了；可以改的是「View details」下的說明，現在是「cc-sticky-note：Jev 95% 判斷是旁支 → 便利貼『…』」（追問時是「判斷是追問『<上一題>』」，手動選時是「你選了旁支」）。
+  - 開 pane 的按鈕放不到「回應那邊」（同上：只有 H 能放按鈕）。改為 **`autoOpenPane` 預設開**：答案一到就自動開右側 pane 並選中那一則（PLAN.md 同步改了；設定裡可以關）。
 
 ## 〇之四、UI 能放在哪裡（10/07 下午）
 
@@ -372,7 +376,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **84 pass / 0 fail**（7 個檔；新增狀態列、`/sn`、詢問信心的測試；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
+- `claude plugin test .`：✅ **86 pass / 0 fail**（7 個檔；新增 drop 說明與灰字預覽的測試；新增狀態列、`/sn`、詢問信心的測試；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動

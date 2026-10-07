@@ -87,8 +87,8 @@
     "autoOpenPane": {
       "type": "boolean",
       "title": "Auto-open pane",
-      "default": false,
-      "description": "Open the pane automatically when a sidebar answer arrives"
+      "default": true,
+      "description": "Open the pane (and select the new note) when a sidebar answer arrives"
     },
     "contextIndexMaxTokens": {
       "type": "number",
