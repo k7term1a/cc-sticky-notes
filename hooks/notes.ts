@@ -84,6 +84,10 @@ export function snippet(s: string, n: number): string {
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
 }
 
+/** How much of the question the drop card quotes, and of the answer the log line previews (the developer: keep them short). */
+export const QUESTION_CHARS = 24
+export const PREVIEW_CHARS = 40
+
 /** Markdown flattened to one plain line (headings, emphasis, code, tables, list marks dropped), first n characters. */
 export function plainPreview(md: string, n: number): string {
   const text = md
@@ -97,7 +101,7 @@ export function plainPreview(md: string, n: number): string {
 
 /** The drop reason is the transparency line (PLAN.md / PROBE.md P2). */
 export function dropReason(question: string): string {
-  return `cc-sticky-note：便利貼「${snippet(question, 40)}」`
+  return `cc-sticky-note：便利貼「${snippet(question, QUESTION_CHARS)}」`
 }
 
 /**
@@ -115,7 +119,7 @@ export function explainDrop(question: string, routed: Routed): string {
       : routed.verdict !== null
         ? `Jev ${Math.round(routed.verdict.route.confidence * 100)}% 判斷是${where}`
         : `判斷是${where}`
-  return `cc-sticky-note：${who} → 便利貼「${snippet(question, 40)}」`
+  return `cc-sticky-note：${who} → 便利貼「${snippet(question, QUESTION_CHARS)}」`
 }
 
 /**
@@ -321,7 +325,7 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     await p.state.addUnread(1)
     // M1 (PLAN.md): the answer is shown with $.ui.log — a dim transcript line the model never reads.
     // $.ui.log is plain text (no Markdown): one clean line here, the rendered answer in the pane.
-    p.ui.log(`cc-sticky-note ${ts.title}${a.answeredBy === 'claude-fork' ? '' : '（無專案脈絡）'}：${plainPreview(ts.summary ?? a.text, 80)}　/sn 看完整答案`)
+    p.ui.log(`cc-sticky-note ${ts.title}：${plainPreview(ts.summary ?? a.text, PREVIEW_CHARS)}　/sn 看完整答案`)
     p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
   } finally {

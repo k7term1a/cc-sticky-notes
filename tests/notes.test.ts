@@ -343,4 +343,10 @@ describe('the drop line and the log preview', () => {
     expect(p.startsWith('CRDT（Conflict-free） CRDT 是一種 無衝突 資料型別。')).toBe(true)
     expect([...plainPreview(md, 10)]).toHaveLength(11) // 10 + …
   })
+
+  test('the drop card quotes at most 24 characters of the question', () => {
+    const long = '為什麼分散式系統裡的 CRDT 可以不靠中央伺服器就讓所有副本最後一致？'
+    const line = explainDrop(long, { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.9, source: 'jev' } }, verdict: v(0.9), asked: null, activeTitle: null })
+    expect(line).toBe(`cc-sticky-note：Jev 90% 判斷是旁支 → 便利貼「${[...long].slice(0, 24).join('')}…」`)
+  })
 })
