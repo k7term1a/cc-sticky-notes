@@ -3,7 +3,7 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { RouteSample, Tree } from '../types'
 import { listSamples } from '../hooks/feedback'
-import { askQuestion, bookmarkNote, giveFeedback, readOptions, recordRoute, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { askQuestion, explainDrop, plainPreview, bookmarkNote, giveFeedback, readOptions, recordRoute, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { statusLine } from '../hooks/pane'
 import type { KV, Ports } from '../hooks/ports'
 import { ASK_OPTIONS } from '../hooks/route'
@@ -220,7 +220,7 @@ describe('notes end to end (stubbed fork and complete)', () => {
     await f.runLater()
     expect((await f.tree()).nodes[id]).toMatchObject({ answer: 'answer #1', answeredBy: 'claude-fork', title: '標題', summary: '一。二。三。' })
     expect(f.toasts).toContain('cc-sticky-note 標題')
-    expect(f.logs.some(l => l.startsWith('cc-sticky-note 標題\nanswer #1'))).toBe(true)
+    expect(f.logs).toContain('cc-sticky-note 標題：一。二。三。　/sn 看完整答案')
     expect([...f.toasts, ...f.logs].join('')).not.toMatch(/\p{Extended_Pictographic}/u)
   })
 
@@ -309,5 +309,34 @@ describe('status line (under the prompt, no emoji)', () => {
     expect(statusLine(t, 'S1', 1)).toBe(`cc-sticky-note ${title}（回答中）`)
     expect(statusLine(t, 'S2', 0)).toBe('cc-sticky-note')
     expect(statusLine(t, 'S1', 1)).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+})
+
+describe('the drop line and the log preview', () => {
+  const v = (confidence: number) => ({ route: { label: 'sidebar_knowledge' as const, confidence }, isFollowup: 0, needsProjectCtx: 0 })
+
+  test('the drop detail says who decided, how sure Jev was and where it went', () => {
+    expect(explainDrop('CRDT 是什麼？', { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.95, source: 'jev' } }, verdict: v(0.951), asked: null, activeTitle: null }))
+      .toBe('cc-sticky-note：Jev 95% 判斷是旁支 → 便利貼「CRDT 是什麼？」')
+    expect(explainDrop('那衝突怎麼解？', { decision: { kind: 'sidebar', attach: 'followup', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.88, source: 'jev' } }, verdict: v(0.88), asked: null, activeTitle: 'CRDT無衝突複製' }))
+      .toBe('cc-sticky-note：Jev 88% 判斷是追問「CRDT無衝突複製」 → 便利貼「那衝突怎麼解？」')
+    expect(explainDrop('x', { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 1, source: 'ask' } }, verdict: v(0.4), asked: '旁支（新 note）', activeTitle: null }))
+      .toBe('cc-sticky-note：你選了旁支 → 便利貼「x」')
+  })
+
+  test('the log preview is one plain line, no Markdown marks', () => {
+    const md = [
+      '# CRDT（Conflict-free）',
+      'CRDT 是一種**無衝突**資料型別。',
+      '## 核心特性',
+      '- **無衝突**：多個副本',
+      '| 型別 | 用途 |',
+      '|------|------|',
+      '| 計數器 | 遞增 |',
+    ].join('\n')
+    const p = plainPreview(md, 200)
+    expect(p).not.toMatch(/[#*|]/)
+    expect(p.startsWith('CRDT（Conflict-free） CRDT 是一種 無衝突 資料型別。')).toBe(true)
+    expect([...plainPreview(md, 10)]).toHaveLength(11) // 10 + …
   })
 })

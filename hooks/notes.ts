@@ -84,12 +84,38 @@ export function snippet(s: string, n: number): string {
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
 }
 
-/** First n characters, newlines kept (answers are Markdown). */
-const clip = (s: string, n: number) => ([...s].length > n ? [...s].slice(0, n).join('') + '…' : s)
+/** Markdown flattened to one plain line (headings, emphasis, code, tables, list marks dropped), first n characters. */
+export function plainPreview(md: string, n: number): string {
+  const text = md
+    .replace(/```[\s\S]*?(```|$)/g, ' ')
+    .replace(/^\s*\|?[\s:|-]+\|[\s:|-]*$/gm, ' ') // table rules
+    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/[*_`|>#]+/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  return snippet(text, n)
+}
 
 /** The drop reason is the transparency line (PLAN.md / PROBE.md P2). */
 export function dropReason(question: string): string {
-  return `→ 便利貼：${snippet(question, 40)}`
+  return `cc-sticky-note：便利貼「${snippet(question, 40)}」`
+}
+
+/**
+ * The detail under the desktop's own "Prompt blocked by a hook" title (that title
+ * is the app's; the reason is ours): who decided, how sure Jev was, and where it went.
+ */
+export function explainDrop(question: string, routed: Routed): string {
+  const where =
+    routed.decision.kind === 'sidebar' && routed.decision.attach === 'followup' && routed.activeTitle !== null
+      ? `追問「${routed.activeTitle}」`
+      : '旁支'
+  const who =
+    routed.asked !== null
+      ? `你選了${where}`
+      : routed.verdict !== null
+        ? `Jev ${Math.round(routed.verdict.route.confidence * 100)}% 判斷是${where}`
+        : `判斷是${where}`
+  return `cc-sticky-note：${who} → 便利貼「${snippet(question, 40)}」`
 }
 
 /**
@@ -130,6 +156,8 @@ export type Routed = {
   verdict: jev.JevVerdict | null
   /** The label the user picked when asked; null when not asked (or dismissed). */
   asked: string | null
+  /** Title of this session's activeThread when the prompt came in (a follow-up's parent). */
+  activeTitle: string | null
 }
 
 /**
@@ -139,23 +167,25 @@ export type Routed = {
 export async function routePrompt(p: Ports, opts: Options, prompt: string): Promise<Routed> {
   const sessionId = await p.sessionId()
   const tree = await refresh(p)
-  const hasActiveThread = (tree.activeThread[sessionId] ?? null) !== null
+  const activeId = tree.activeThread[sessionId] ?? null
+  const hasActiveThread = activeId !== null
+  const activeTitle = activeId === null ? null : (tree.nodes[activeId]?.title ?? null)
   const r = await jev.classify({ key: await p.keys.typesafe(), fetch: p.fetch, now: p.now }, await jevInput(p, tree, sessionId, prompt))
   if (!r.ok) {
     if (r.reason !== 'no-key') p.ui.log(`sticky-notes: Jev unavailable (${r.reason}${r.status ? ` ${r.status}` : ''}); main line`, 'debug')
-    return { decision: { kind: 'main' }, verdict: null, asked: null }
+    return { decision: { kind: 'main' }, verdict: null, asked: null, activeTitle }
   }
   const decision = decide(r.verdict, { route: opts.routeThreshold, followup: opts.followupThreshold }, {
     hasActiveThread,
     tagsKnown: tree.tags.length,
   })
-  if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: null }
+  if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: null, activeTitle }
   try {
     const asked = await p.ui.ask(askQuestion(r.verdict), ASK_OPTIONS, 'Sticky Notes')
-    return { decision: decideFromAsk(asked, { hasActiveThread }), verdict: r.verdict, asked }
+    return { decision: decideFromAsk(asked, { hasActiveThread }), verdict: r.verdict, asked, activeTitle }
   } catch {
     // dismissed, or headless (-p): never swallow the user's input
-    return { decision: { kind: 'main' }, verdict: r.verdict, asked: null }
+    return { decision: { kind: 'main' }, verdict: r.verdict, asked: null, activeTitle }
   }
 }
 
@@ -290,7 +320,8 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     await change(p, t => updateNode(t, id, { title: ts.title, summary: ts.summary }))
     await p.state.addUnread(1)
     // M1 (PLAN.md): the answer is shown with $.ui.log — a dim transcript line the model never reads.
-    p.ui.log(`cc-sticky-note ${ts.title}${a.answeredBy === 'claude-fork' ? '' : '（無專案脈絡）'}\n${clip(a.text, 2000)}`)
+    // $.ui.log is plain text (no Markdown): one clean line here, the rendered answer in the pane.
+    p.ui.log(`cc-sticky-note ${ts.title}${a.answeredBy === 'claude-fork' ? '' : '（無專案脈絡）'}：${plainPreview(ts.summary ?? a.text, 80)}　/sn 看完整答案`)
     p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
   } finally {

@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { bookmarkNote, change, dropReason, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
+import { bookmarkNote, change, explainDrop, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
@@ -184,8 +184,8 @@ export const register: Register = (on, options) => {
             tag: d.tag.kind === 'existing' ? d.tag.tag : undefined,
           }),
         )
-        // The drop reason is the transparency line (PROBE.md P2): no separate $.ui.log.
-        return { drop: dropReason(e.text) }
+        // The drop reason is the transparency line (PROBE.md P2): who decided, how sure, where it went.
+        return { drop: explainDrop(e.text, routed) }
     }
   })
 
