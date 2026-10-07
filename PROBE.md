@@ -21,6 +21,21 @@
 
 ---
 
+## 設計改動：Jev 不再自動建立便利貼（10/07 傍晚，你的決定）
+
+- **決策表**（`route.ts`；PLAN.md「決策表」、成功標準 1、2、10 已同步）：
+  - 沒有 Jev（沒 key、錯誤、回應壞掉）→ 主線，不問。
+  - `main_task` 且信心 ≥ `routeThreshold` → `next(e)`，不問。
+  - `main_task` 信心不足、`sidebar_knowledge`（任何信心）→ `$.ui.ask`。
+  - `project_question` ≥ 門檻照舊（主線 + context + 不成為 activeThread 的書籤）；不足 → `$.ui.ask`。這一條你沒提到，我沿用原本的。
+- **對話框**：問題「這句要怎麼處理？(Jev：知識旁問 96%)」；有 activeThread 時〔接在「<標題>」下〕〔開新的便利貼〕〔送進主線〕，`is_followup ≥ followupThreshold` 時「接在…下」排第一，否則「開新的便利貼」排第一；沒有 activeThread 時〔開新的便利貼〕〔送進主線〕。關掉或在 Other 打字 → 主線。
+- **節點**：`route = { label: 'new' | 'followup', confidence: <Jev 信心>, source: 'ask' }`。
+- **回饋紀錄**：`feedback:<root>:<id>` = `{ jev: { route, confidence, isFollowup, needsProjectCtx, tag }, choice, choiceSource, asked, outcome, prompt 前 200 字, thresholds, nodeId }`，每一句 Jev 看過的都記（不只問過的）。Jev 直接放行、沒問的那句 `choice` 先是 null，可用 `/sn feedback main|new|followup|good` 補。原本的 `route:<root>:<id>` 樣本不再寫，舊資料留著不讀。
+- **drop 卡片**的說明改成「cc-sticky-note：新的便利貼「…」」／「接在「<標題>」下「…」」（便利貼一定是你選的，不再寫「Jev 96% 判斷是…」）。
+- **本機與遠端同一套**：`composer` 和 `bridge` 不分流，沒有 remoteDeliver / remoteBehavior / passthrough；上一節「建議」的 (a)(b)(c) 不採用。RC1（B 看不到 drop 提示等）照舊，但對話框會到 B，你在 B 上選了才會建便利貼，所以 B 上的「話被吞掉」只剩選完之後那一下。RC4 為已知問題。
+
+**Desktop 的 side chat 有沒有 hook**：型別檔（2.1.289）裡沒有任何 side chat 的事件或 API（搜尋 side chat / side question / btw / sidechain 都沒有；事件只有 prompt / session / turn / tool / ui 這幾類）。mod 不能打開 side chat、也不能把內容寫進去。⏳ 沒驗：side chat 裡自己送出的 prompt 會不會經過這個 mod 的 `prompt.submit`、`origin` 是什麼。要的話可以再加一個探針（在 side chat 打一句、看紀錄）。
+
 ## Remote Control（10/07 下午）
 
 情境：mod 裝在 A（Windows，Claude Desktop 開 Remote Control），session 在 A 上跑；在 B 的 Claude Desktop 打開 A 的這個 session、從 B 打字。探針是暫時加在正式 mod 裡的 `/rcprobe`（commit `73440b0`，探完已移除），紀錄寫在 A 的 `$.store` `rcprobe:log`。Claude Code 2.1.289。
@@ -63,7 +78,7 @@
 - **RC1｜從 B 送出、被判成便利貼的 prompt，B 完全不知道。** `{ drop }` 的提示（以及 classic `block`）只出現在 A；mod 自己畫的狀態列、pane、toast 也都只在 A。PLAN 的成功標準 1「畫面上只有一行『→ 便利貼』」在 B 上不成立：B 上只會看到話不見了。
 - **RC2｜`suppressOriginalPrompt` 不能當「不進主線」用。** 模型照樣讀到原句（以及附加的 context），它只是 settings hook 的一個欄位，對主線 context 沒有我們要的效果。
 - **RC3｜答案不能以排版形式送到 B。** 能到 B 的只有 `$.ui.ask` 的問題文字（純文字，300 字內不截斷）與選項標籤；帶 `preview` 的 AskUserQuestion 被引擎擋下。
-- **RC4｜`$.ui.ask` 在 B 上留下「回應中」的轉圈。** 這是 RC1 唯一確定能到 B 的路，但用了之後 B 會以為有一個回合在跑、一直轉，直到下一個真的回合結束（推測）。
+- **RC4｜`$.ui.ask` 在 B 上留下「回應中」的轉圈。** 這是 RC1 唯一確定能到 B 的路，但用了之後 B 會以為有一個回合在跑、一直轉，直到下一個真的回合結束（推測）。**已知問題，你決定暫不處理（10/07）。**
 
 ### 建議（等你決定，沒有實作）
 
@@ -433,7 +448,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **87 pass / 0 fail**（7 個檔；新增卡片引用字數的測試；新增 drop 說明與灰字預覽的測試；新增狀態列、`/sn`、詢問信心的測試；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
+- `claude plugin test .`：✅ **89 pass / 0 fail**（7 個檔；route / notes / feedback 測試依「Jev 不自動建便利貼」重寫；新增卡片引用字數的測試；新增 drop 說明與灰字預覽的測試；新增狀態列、`/sn`、詢問信心的測試；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動

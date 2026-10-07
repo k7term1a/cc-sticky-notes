@@ -1,18 +1,18 @@
 // Orchestration between the hooks and the pure modules: where a prompt goes,
 // creating a note, answering it in the background, keeping the pane's state in
-// sync, and keeping routing samples. Everything outside goes through Ports.
+// sync, and keeping the routing feedback records. Everything outside goes through Ports.
 import type { ModelEffort, PluginOptions } from 'claude-code'
 
-import type { RouteFeedback, Tree } from '../types'
+import type { AskChoice, FeedbackRecord, Tree } from '../types'
 import { answerSide } from './answer'
 import { titleAndSummary } from './digest'
-import { choiceOf, recordSample, sampleFrom, sampleId, setFeedback } from './feedback'
+import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
 import type { Ports } from './ports'
 import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
-import { ASK_OPTIONS, decide, decideFromAsk, NEEDS_CTX_AT, type Decision } from './route'
+import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, type Decision } from './route'
 import { addNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
@@ -105,21 +105,16 @@ export function dropReason(question: string): string {
 }
 
 /**
- * The detail under the desktop's own "Prompt blocked by a hook" title (that title
- * is the app's; the reason is ours): who decided, how sure Jev was, and where it went.
+ * The reason under the desktop's own "A hook blocked your prompt" card (the card
+ * is the app's; the reason is ours): where the note went. Every note comes from
+ * the user's pick now, so there is no "Jev decided" wording.
  */
 export function explainDrop(question: string, routed: Routed): string {
   const where =
     routed.decision.kind === 'sidebar' && routed.decision.attach === 'followup' && routed.activeTitle !== null
-      ? `追問「${routed.activeTitle}」`
-      : '旁支'
-  const who =
-    routed.asked !== null
-      ? `你選了${where}`
-      : routed.verdict !== null
-        ? `Jev ${Math.round(routed.verdict.route.confidence * 100)}% 判斷是${where}`
-        : `判斷是${where}`
-  return `cc-sticky-note：${who} → 便利貼「${snippet(question, QUESTION_CHARS)}」`
+      ? `接在「${routed.activeTitle}」下`
+      : '新的便利貼'
+  return `cc-sticky-note：${where}「${snippet(question, QUESTION_CHARS)}」`
 }
 
 /**
@@ -150,83 +145,93 @@ export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: 
   }
 }
 
-/** "這句要進主線還是旁支？(32%)": Jev's confidence in its own top route, shown when it was too low to act on. */
-export function askQuestion(verdict: jev.JevVerdict): string {
-  return `這句要進主線還是旁支？(${Math.round(verdict.route.confidence * 100)}%)`
-}
-
 export type Routed = {
   decision: Decision
   verdict: jev.JevVerdict | null
-  /** The label the user picked when asked; null when not asked (or dismissed). */
-  asked: string | null
+  /** Whether the dialog was shown. */
+  asked: boolean
+  /** The user's pick in the dialog; null when not asked, dismissed, or free text. */
+  choice: AskChoice | null
   /** Title of this session's activeThread when the prompt came in (a follow-up's parent). */
   activeTitle: string | null
 }
 
 /**
- * Jev, then the decision table. No Jev (no key, an error) → main line, no
- * dialog (PLAN.md「沒有 Jev key 時」). Low confidence → $.ui.ask.
+ * Jev, then the decision table (route.ts). Jev never makes a note by itself:
+ * a confident main_task goes through, anything that might be a note asks.
+ * No Jev (no key, an error) → main line, no dialog. Local (composer) and
+ * Remote Control (bridge) prompts take the same path; the dialog reaches both.
  */
 export async function routePrompt(p: Ports, opts: Options, prompt: string): Promise<Routed> {
   const sessionId = await p.sessionId()
   const tree = await refresh(p)
   const activeId = tree.activeThread[sessionId] ?? null
-  const hasActiveThread = activeId !== null
   const activeTitle = activeId === null ? null : (tree.nodes[activeId]?.title ?? null)
   const r = await jev.classify({ key: await p.keys.typesafe(), fetch: p.fetch, now: p.now }, await jevInput(p, tree, sessionId, prompt))
   if (!r.ok) {
     if (r.reason !== 'no-key') p.ui.log(`sticky-notes: Jev unavailable (${r.reason}${r.status ? ` ${r.status}` : ''}); main line`, 'debug')
-    return { decision: { kind: 'main' }, verdict: null, asked: null, activeTitle }
+    return { decision: { kind: 'main' }, verdict: null, asked: false, choice: null, activeTitle }
   }
-  const decision = decide(r.verdict, { route: opts.routeThreshold, followup: opts.followupThreshold }, {
-    hasActiveThread,
-    tagsKnown: tree.tags.length,
-  })
-  if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: null, activeTitle }
+  const decision = decide(r.verdict, { route: opts.routeThreshold, followup: opts.followupThreshold })
+  if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: false, choice: null, activeTitle }
+  const dialog = askPrompt(r.verdict, { activeTitle, followupThreshold: opts.followupThreshold })
   try {
-    const asked = await p.ui.ask(askQuestion(r.verdict), ASK_OPTIONS, 'Sticky Notes')
-    return { decision: decideFromAsk(asked, { hasActiveThread }), verdict: r.verdict, asked, activeTitle }
+    const answer = await p.ui.ask(dialog.question, dialog.options.map(o => o.label), 'Sticky Notes')
+    const choice = choiceOf(dialog, answer)
+    return { decision: decideFromChoice(choice, r.verdict, tree.tags.length), verdict: r.verdict, asked: true, choice, activeTitle }
   } catch {
     // dismissed, or headless (-p): never swallow the user's input
-    return { decision: { kind: 'main' }, verdict: r.verdict, asked: null, activeTitle }
+    return { decision: { kind: 'main' }, verdict: r.verdict, asked: true, choice: null, activeTitle }
   }
 }
 
+/** What a routed prompt became, in the record's words. */
+export function outcomeOf(d: Decision): FeedbackRecord['outcome'] {
+  if (d.kind === 'project_question') return 'project_question'
+  if (d.kind === 'sidebar') return d.attach === 'followup' ? 'followup' : 'new'
+  return 'main'
+}
+
 /**
- * Keeps one routing sample for calibration. Prompts Jev never saw (no key)
- * are not kept. When the user was asked, their answer is the label.
+ * Keeps one feedback record (Jev's call, its confidence, the user's choice) at
+ * feedback:<root>:<id>. Prompts Jev never saw (no key) are not kept.
  */
-export async function recordRoute(p: Ports, opts: Options, prompt: string, routed: Routed, nodeId: string | null): Promise<string | null> {
+export async function recordFeedback(p: Ports, opts: Options, prompt: string, routed: Routed, nodeId: string | null): Promise<string | null> {
   if (routed.verdict === null) return null
   const at = await p.now()
-  const id = sampleId(at, crypto.randomUUID())
-  const feedback: RouteFeedback | null =
-    routed.asked === null ? null : { verdict: 'right', expected: choiceOf(routed.decision) as RouteFeedback['expected'], at, source: 'ask' }
-  await recordSample(
+  const id = recordId(at, crypto.randomUUID())
+  await saveRecord(
     p.store,
     await projectKey(p),
-    sampleFrom({
+    makeRecord({
       id,
       at,
       sessionId: await p.sessionId(),
       prompt,
       verdict: routed.verdict,
       thresholds: { route: opts.routeThreshold, followup: opts.followupThreshold, needsCtx: NEEDS_CTX_AT },
-      decision: routed.asked === null ? routed.decision : { kind: 'ask', why: 'low-confidence' },
+      asked: routed.asked,
+      outcome: outcomeOf(routed.decision),
+      choice: routed.choice,
       nodeId,
-      feedback,
     }),
   )
   await p.state.setLastSampleId(id)
   return id
 }
 
-/** /sticky-note feedback: marks this session's last routing sample. */
-export async function giveFeedback(p: Ports, feedback: Omit<RouteFeedback, 'at'>): Promise<boolean> {
+/**
+ * /sn feedback: the user's choice for this session's last record, said afterwards.
+ * `good` keeps what happened (a project question counts as the main line).
+ */
+export async function giveFeedback(p: Ports, fb: { choice: AskChoice } | { good: true }): Promise<FeedbackRecord | null> {
   const id = await p.state.lastSampleId()
-  if (id === null) return false
-  return (await setFeedback(p.store, await projectKey(p), id, { ...feedback, at: await p.now() })) !== null
+  if (id === null) return null
+  const root = await projectKey(p)
+  if ('choice' in fb) return setChoice(p.store, root, id, fb.choice)
+  const record = await getRecord(p.store, root, id)
+  if (record === null) return null
+  return setChoice(p.store, root, id, record.outcome === 'project_question' ? 'main' : record.outcome)
 }
 
 export type NoteRequest = {

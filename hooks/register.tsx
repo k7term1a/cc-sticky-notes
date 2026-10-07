@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { bookmarkNote, change, explainDrop, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
+import { bookmarkNote, change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
@@ -164,7 +164,7 @@ export const register: Register = (on, options) => {
 
     const p = portsOf($)
     const routed = await routePrompt(p, opts, e.text)
-    const keep = (nodeId: string | null) => p.later(() => void recordRoute(p, opts, e.text, routed, nodeId))
+    const keep = (nodeId: string | null) => p.later(() => void recordFeedback(p, opts, e.text, routed, nodeId))
     const d = routed.decision
     switch (d.kind) {
       case 'main':

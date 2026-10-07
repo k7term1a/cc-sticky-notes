@@ -3,7 +3,7 @@
 // long or private goes to $.ui.log / toast instead and the command returns {}.
 import type { CommandRunResult } from 'claude-code'
 
-import { calibrate, formatCalibration, listSamples, parseFeedback } from './feedback'
+import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
 import { change, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
@@ -13,8 +13,10 @@ export const COMMAND = 'sticky-note'
 export const COMMAND_SPEC = {
   name: COMMAND,
   description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | promote | outline | refresh | digest | export | mode | stats',
-  argumentHint: '[new <問題> | back | feedback good|bad [main|sidebar|followup|project] | calibrate]',
+  argumentHint: '[new <問題> | back | feedback main|new|followup|good | calibrate]',
 }
+
+const CHOICE_NAME = { main: '主線', new: '新的便利貼', followup: '追問' } as const
 
 /**
  * /sn: the keyboard way to the pane. The status line cannot be clicked, a plugin
@@ -84,9 +86,9 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
     }
     case 'feedback': {
       const fb = parseFeedback(rest)
-      if (fb === null) return { text: '用法：/sticky-note feedback good|bad [main|sidebar|followup|project]' }
-      const ok = await giveFeedback(p, { ...fb, source: 'command' })
-      p.ui.toast(ok ? `已記下：上一句分類${fb.verdict === 'right' ? '正確' : '錯誤'}${fb.expected ? `，應為 ${fb.expected}` : ''}` : '這個 session 還沒有可以回饋的分類')
+      if (fb === null) return { text: '用法：/sn feedback main|new|followup（這句應該是什麼），或 good（現在這樣就對）' }
+      const record = await giveFeedback(p, fb)
+      p.ui.toast(record ? `已記下：上一句應該是 ${CHOICE_NAME[record.choice ?? 'main']}` : '這個 session 還沒有可以回饋的路由紀錄')
       return {}
     }
     case 'doctor': {
@@ -94,7 +96,7 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       return {}
     }
     case 'calibrate': {
-      const lines = formatCalibration(calibrate(await listSamples(p.store, await projectKey(p))))
+      const lines = formatCalibration(calibrate(await listRecords(p.store, await projectKey(p))))
       for (const line of lines) p.ui.log(line)
       return {}
     }

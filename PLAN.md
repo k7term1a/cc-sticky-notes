@@ -14,8 +14,8 @@ Oct 6, 2026 · @楷奇
 
 **成功標準（M4 完成時）**
 
-1. 在主線打一句知識性問題，Claude 的 context 不出現它（畫面上只有一行「→ 便利貼：…」的提示），答案在 pane 出現，延遲小於 5 秒。
-2. 連續追問三層，每層都掛在同一條旁支下；中途回到專案任務再問新問題，Jev 會開新 root 而不是接到舊旁支；點回某個節點再問，會在它底下多一個子節點。
+1. 在主線打一句知識性問題，Jev 判成旁問時跳出「這句要怎麼處理？(Jev：知識旁問 96%)」讓我選；選了便利貼，Claude 的 context 不出現它（畫面上只有一行「cc-sticky-note：新的便利貼「…」」的提示），答案在 pane 出現，選完後延遲小於 5 秒。Jev 不會自己建便利貼。
+2. 連續追問三層，每層都掛在同一條旁支下（對話框把〔接在「<目前追問>」下〕放第一個，依 is_followup 排序）；中途回到專案任務，有把握的專案任務直接進主線、不問；再問新問題時可以選〔開新的便利貼〕而不是接到舊旁支；點回某個節點再問，會在它底下多一個子節點。
 3. 點 pane 上任一節點後，直接在主 prompt 框打字就是追問它，答案出在 pane；主線一樣乾淨。
 4. 同一專案開幾個 session 都看同一棵樹（fork 的、為了 context 長度重開的、不同 worktree 的都算）；每個 session 各自記自己正在追問哪個節點；兩個 session 同時寫入不會互相蓋掉。
 5. 選幾個 root 按「整合」，統整層產出一個大綱分組；大綱只有一層，不能再被整合。
@@ -23,6 +23,7 @@ Oct 6, 2026 · @楷奇
 7. 統整層預設走 Claude 訂閱（`$.model.complete`，可選模型與 effort），裝了就能用；設定 `summaryProvider = openai` 可改走 OpenAI 免費額度，兩條路功能相同。
 8. 不論哪個供應者，除了每節點的標題與摘要之外，會花額度的動作全部由我按下去才發生；OpenAI 超過 cap 就暫停並詢問。
 9. 沒有 Jev key 時所有輸入都進主線，只有 `/sticky-note new` 和 pane 追問框能建 note；不會跳對話框問我。
+10. 本機（composer）和 Remote Control 遠端（bridge）送出的 prompt 走同一套流程；對話框在遠端也看得到、能作答（PROBE.md「Remote Control」）。
 
 ## 核心概念
 
@@ -61,14 +62,15 @@ Oct 6, 2026 · @楷奇
 prompt.submit hook
    │  1. $.http.fetch 呼叫 Jev：route / is_followup / needs_project_ctx / tag
    │     state 裡帶本 session 的 activeThread（使用者剛在 pane 點的節點）與主線脈絡摘要
-   │  2. 信心 < 門檻 → $.ui.ask 問使用者（主線 / 新 note / 追問）
+   │  2. main_task 且信心 ≥ 門檻 → 直接主線；其餘（sidebar_knowledge 任何信心、main_task 信心不足）→ $.ui.ask
+   │     〔接在「<activeThread>」下〕〔開新的便利貼〕〔送進主線〕；Jev 不自己建便利貼
    ▼
 ┌─ main ──────────► next(e)，原樣送進主線
 │
-├─ sidebar ───────► return { drop }，主線不收到
+├─ 使用者選了便利貼 ► return { drop }，主線不收到
 │                    │
-│                    ├ is_followup = true  → 掛在 activeThread 底下（同一個父節點可以有多個子節點）
-│                    └ is_followup = false → 開新 root
+│                    ├ 選〔接在「…」下〕 → 掛在 activeThread 底下（同一個父節點可以有多個子節點）
+│                    └ 選〔開新的便利貼〕 → 開新 root
 │                    │
 │                    ├ needs_project_ctx = true  → $.model.fork({ prompt: 旁支歷史 + 問題 })
 │                    └ needs_project_ctx = false → 統整層供應者直接回答（只送問題與旁支歷史）
@@ -78,7 +80,7 @@ prompt.submit hook
 │                  自動：統整層供應者取標題 + 三句摘要（約 1–2k token）
 │                  $.ui.invalidate 重繪 pane、主線該輪 UserMessage 加徽章
 │
-└─ ask ───────────► $.ui.ask 讓使用者選 main / sidebar
+└─ 每一句 Jev 看過的 ► feedback:<root>:<id> 記 {Jev 判斷, 信心, 使用者選擇}，供校正門檻
 
 統整層供應者（summaryProvider）
    ├ claude（預設）：$.model.complete，吃使用者的 Claude 訂閱；claudeModel / claudeEffort 可調
@@ -263,18 +265,27 @@ main_turns_since_last_sidebar: <整數>
 | `needs_project_ctx` | Noul | 回答這題是否需要看到專案的程式碼或對話內容（否 → 可以走 OpenAI） |
 | `tag` | Choice | 動態選項 = `tree.tags` + `__new__`。清單為空時跳過此題 |
 
-**決策表**
+**決策表**（10/07 改：Jev 不再自動建立便利貼，只決定「要不要問」）
 
 | route | 信心 | 動作 |
 | --- | --- | --- |
-| `main_task` | ≥ 0.6 | `next(e)` |
-| `sidebar_knowledge` | ≥ 0.6 | `{ drop }` + 旁答 |
-| `project_question` | ≥ 0.6 | `next({...e, context: ['[sticky-notes] project question; answer briefly']})`，並在 pane 記一個 `promotedAt = now` 的節點作書籤 |
-| 任一 | < 0.6 | `$.ui.ask('這句要進主線還是旁支？', ['主線', '旁支', '追問旁支'])`，答案寫回節點 `route.source = 'ask'` |
+| `main_task` | ≥ routeThreshold（0.6） | `next(e)`，不問 |
+| `main_task` | < routeThreshold | `$.ui.ask` |
+| `sidebar_knowledge` | 任何信心 | `$.ui.ask` |
+| `project_question` | ≥ routeThreshold | `next({...e, context: ['[sticky-notes] project question; answer briefly']})`，並在 pane 記一個 `promotedAt = now` 的節點作書籤（不成為 activeThread） |
+| `project_question` | < routeThreshold | `$.ui.ask` |
 
-`is_followup ≥ 0.6` 且 route 為 sidebar → 掛在 `activeThread` 下；否則開新 root。`tag` 選到 `__new__` 或信心 < 0.5 → 呼叫 OpenAI 取名（見下節），取到的名字 push 進 `tree.tags`。
+**對話框**：問題文字帶 Jev 的判斷與信心，例如「這句要怎麼處理？(Jev：知識旁問 96%)」。
 
-`is_followup ≥ 0.6` 且 route 為 sidebar → 掛在本 session 的 `activeThread` 下；否則開新 root。`needs_project_ctx ≥ 0.3` 就走 `$.model.fork`（偏保守：寧可多用看得到脈絡的 Claude，少把東西送出去）。`tag` 選到 `__new__` 或信心 < 0.5 → 統整層取名，取到的名字 push 進 `tree.tags`。
+- 有 activeThread：〔接在「<activeThread 標題>」下〕〔開新的便利貼〕〔送進主線〕；`is_followup ≥ followupThreshold` 時「接在…下」排第一，否則「開新的便利貼」排第一。
+- 沒有 activeThread：〔開新的便利貼〕〔送進主線〕。
+- 關掉對話框、或在 Other 打字 → 送進主線（不吞掉使用者的話）。
+
+使用者選了便利貼：節點的 `route = { label: 'new' | 'followup', confidence: <Jev 的信心>, source: 'ask' }`；`needs_project_ctx ≥ 0.3` 就走 `$.model.fork`（偏保守：寧可多用看得到脈絡的 Claude，少把東西送出去），否則走統整層供應者。`tag` 選到 `__new__` 或信心 < 0.5 → 統整層取名，取到的名字 push 進 `tree.tags`。
+
+**路由回饋**：每一句 Jev 看過的 prompt 都在 `$.store` 記一筆 `feedback:<root>:<id>` = `{ Jev 判斷, 信心, 使用者選擇 }`（另含 prompt 前 200 字、當時門檻、是否有問、最後去了哪、建出的節點；每專案最多 500 筆，只存本機）。對話框的選擇直接當成使用者選擇；Jev 直接放進主線、沒有問的那句，之後可以用 `/sticky-note feedback main|new|followup` 補上。`/sticky-note calibrate` 依這些紀錄算出每個門檻下「不問直接進主線幾句、其中幾句你也要主線、會跳幾成對話框」。
+
+**本機與遠端**：本機（`origin.kind = 'composer'`）和 Remote Control 遠端（`'bridge'`）走同一套，不另做遠端交付。對話框（`$.ui.ask`）會轉送到遠端、能作答；遠端看不到 drop 提示、狀態列、pane、toast（PROBE.md「Remote Control」RC1）。遠端作答後轉圈不停（RC4）是已知問題，之後再看。
 
 **沒有 Jev key 時**：不分類、不問，所有輸入都走主線；只有 `/sticky-note new` 和 pane 追問框能建 note。不用 `$.model.classify` 當退路——它沒有信心值，分錯也看不出來，等於把「不要吞掉我的話」交給一個看不見的判斷。
 
@@ -351,11 +362,11 @@ main_turns_since_last_sidebar: <整數>
 | `/sticky-note export` | 把整棵樹寫成 `.claude/sticky-notes/tree-YYYY-MM-DD.md` |
 | `/sticky-note mode <off\|redacted\|full>` | 切換 `openaiContextMode`，只影響本 session |
 | `/sticky-note stats` | toast 顯示節點數、大綱數、今日 Jev / OpenAI 呼叫次數、OpenAI token 用量 |
-| `/sticky-note feedback good|bad [main|sidebar|followup|project]` | 標記本 session 上一句的路由對不對（路由回饋，見下） |
+| `/sticky-note feedback main\|new\|followup\|good` | 本 session 上一句應該是什麼（路由回饋，見「決策表」） |
 | `/sticky-note calibrate` | 用標記過的樣本算各門檻的準確率與詢問率（`$.ui.log`，不進模型） |
 | `/sticky-note doctor` | 顯示兩把 key 找到與否、從哪個來源（不顯示值） |
 
-**路由回饋**（M1 先做接口，之後再調）：每次 Jev 判斷都記一筆樣本到 `$.store` 的 `route:<root>:<id>`（prompt 前 200 字、Jev 原始機率、當時門檻、決策、建出的節點；每專案最多 500 筆，只存本機）。標記來源：`/sticky-note feedback`、`$.ui.ask` 的選擇（自動當正解）、M2 pane 的「重新分類」。`/sticky-note calibrate` 依標記算出每個門檻會自動路由幾句、對幾句、要問幾句，M1 驗收的 50 句校正就用它。
+**路由回饋**（M1 先做接口，之後再調）：見「決策表」下的「路由回饋」。`/sticky-note feedback main|new|followup` 補上「這句應該是什麼」（`good` = 現在這樣就對），`/sticky-note calibrate` 看各門檻的結果；M2 pane 的「重新分類」之後也接這裡。M1 驗收的 50 句校正就用它。
 
 **透明度**：每次 `{ drop }` 都 `$.ui.log('→ sidebar: ' + title)`，讓我知道那句話去哪了，不會以為沒送出。pane 沒開時改用 `$.ui.toast`。
 
@@ -366,7 +377,7 @@ main_turns_since_last_sidebar: <整數>
 | 期 | 交付 | 驗收 |
 | --- | --- | --- |
 | **M0 探針** | 空 mod 載入成功；`prompt.submit` 能 `{ drop }`；`$.model.fork` 能被呼叫並確認：答案是否進 transcript、是否接受 `system` / 額外歷史、回傳形狀；`$.model.classify` 的簽名；`$.http.fetch` 打 Jev 與 OpenAI 各成功一次；`$.store` 寫讀一次並確認跨 session 共用；`$.session.messages()` 回傳的欄位夠不夠做摘要；`UserMessage` 渲染點能不能加徽章；`$.prompt.suggest` 在 Desktop 的樣子；`$.session` 能不能列出同專案其他 live session | 一份 `PROBE.md` 記錄每個問題的實測答案，附程式碼片段 |
-| **M1 路由** | Jev 四題接上；決策表實作；低信心走 `$.ui.ask`（主線 / 新 note / 追問）；`/sticky-note new` 當手動入口；旁答一律先用 `$.model.fork`，答案 `$.ui.log` 顯示；節點寫入 `$.store`；標題與摘要先用 `$.model.complete` 取 | 用 50 句自己的真實 prompt 跑分類，記錄 route 準確率，據此調門檻；主線 transcript 不出現旁問 |
+| **M1 路由** | Jev 四題接上；決策表實作（Jev 只放行有把握的主線，其餘 `$.ui.ask`：接在…下 / 新便利貼 / 主線）；路由回饋紀錄；`/sticky-note new` 當手動入口；旁答一律先用 `$.model.fork`，答案 `$.ui.log` 顯示；節點寫入 `$.store`；標題與摘要先用 `$.model.complete` 取 | 用 50 句自己的真實 prompt 跑分類，記錄 route 準確率，據此調門檻；主線 transcript 不出現旁問 |
 | **M2 導航** | 徽章 + pane：樹、點節點設 `activeThread` + `$.prompt.suggest` 灰字、答案區、追問框、回到主線、重新分類；主線 `UserMessage` 徽章；`$.ui.log` 透明訊息 | 點節點後在主 prompt 框追問三層正確掛接；回到專案再問會開新 root；主線徽章能開到正確節點 |
 | **M3 大綱與多 session** | 選取模式 + 整合大綱（先用 `$.model.complete`）；大綱折疊、重算、⚠；回流到其他 session；只看本 session；`index.md` 同步；`prompt.context` 注入標題索引；封存與 `export`；標籤 `__new__` 命名 | fork 一個 session，兩邊看到同一棵樹；整合 3 個 root 成一個大綱、大綱不可再選；回流到另一個 session 時對方收到摘要；注入 context 用 `$.session.usage()` 量測 < 300 token |
 | **M4 供應者切換** | 抽出 `summarize(job, input)` 介面；`providers/claude.ts`（`$.model.complete` + `claudeModel` / `claudeEffort`）與 `providers/openai.ts`（`$.http.fetch` + `redact.ts` + 每日 cap + 用量計數）；`summaryProvider` 設定；知識旁路（`needs_project_ctx = false`）走所選供應者；pane 用量條兩種模式各顯示各的；`/sticky-note mode` `stats` | 切 `summaryProvider` 不改任何其他檔案就能跑完整流程；openai 模式下 `redacted` 攔截真實 payload，確認無 code block、路徑、金鑰；跑滿一天看 Usage 頁面只出現 Data sharing incentive tier、無計費；cap 到了按鈕變灰、不自動改用 Claude；claude 模式下 `claudeModel = sonnet` 能生效 |

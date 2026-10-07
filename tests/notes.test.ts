@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
-import type { RouteSample, Tree } from '../types'
-import { listSamples } from '../hooks/feedback'
-import { askQuestion, explainDrop, plainPreview, bookmarkNote, giveFeedback, readOptions, recordRoute, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import type { FeedbackRecord, Tree } from '../types'
+import { listRecords } from '../hooks/feedback'
+import { bookmarkNote, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { statusLine } from '../hooks/pane'
 import type { KV, Ports } from '../hooks/ports'
-import { ASK_OPTIONS } from '../hooks/route'
+import { MAIN_LABEL, NEW_NOTE_LABEL } from '../hooks/route'
 import { loadTree } from '../hooks/tree'
 
 const ROOT = '/repo'
@@ -20,6 +20,7 @@ type Fake = {
   toasts: string[]
   logs: string[]
   asked: () => number
+  lastAsk: () => { question: string; options: string[] } | null
   opened: () => number
   runLater(): Promise<void>
   tree(): Promise<Tree>
@@ -42,6 +43,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   const queue: (() => void)[] = []
   let session = 'S1'
   let asked = 0
+  let lastAsk: { question: string; options: string[] } | null = null
   let openaiCalls = 0
   let opened = 0
   let now = 1000
@@ -81,8 +83,9 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     ui: {
       log: t => void logs.push(t),
       toast: t => void toasts.push(t),
-      ask: async () => {
+      ask: async (question, options) => {
         asked++
+        lastAsk = { question, options: [...options] }
         if (opts.askAnswer === undefined) throw new Error('dismissed')
         return opts.askAnswer
       },
@@ -115,6 +118,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     toasts,
     logs,
     asked: () => asked,
+    lastAsk: () => lastAsk,
     opened: () => opened,
     runLater: async () => {
       while (queue.length) {
@@ -138,7 +142,7 @@ const jevSays = (route: string, confidence: number, isFollowup = 0, needsCtx = 1
   },
 })
 
-describe('routePrompt', () => {
+describe('routePrompt: Jev never makes a note by itself', () => {
   test('without TYPESAFE_API_KEY everything goes to the main line, with no dialog and no request', async () => {
     const f = fake()
     expect((await routePrompt(f.ports, opts, 'what is a monad')).decision).toEqual({ kind: 'main' })
@@ -146,68 +150,81 @@ describe('routePrompt', () => {
     expect(f.jevCalls).toHaveLength(0)
   })
 
-  test('with a key, Jev decides and receives the main-line context', async () => {
-    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.9) })
-    expect((await routePrompt(f.ports, opts, 'what is TCP backpressure')).decision).toMatchObject({ kind: 'sidebar' })
+  test('a confident main_task goes through without a dialog; Jev gets the main-line context', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.9) })
+    expect(await routePrompt(f.ports, opts, 'fix the login bug')).toMatchObject({ decision: { kind: 'main' }, asked: false })
+    expect(f.asked()).toBe(0)
     const state = (f.jevCalls[0] as { state: string }).state
     expect(state).toContain('refactor auth to session cookies')
-    expect(state).not.toContain('command-name')
-    expect(state).toContain('[new prompt]\nwhat is TCP backpressure')
+    expect(state).toContain('[new prompt]\nfix the login bug')
   })
 
-  test('low Jev confidence asks; the answer decides', async () => {
-    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.4), askAnswer: ASK_OPTIONS[1] })
+  test('sidebar_knowledge always asks, even at 99%; picking 開新的便利貼 makes a root note', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.99), askAnswer: NEW_NOTE_LABEL })
+    const r = await routePrompt(f.ports, opts, 'what is TCP backpressure')
+    expect(f.lastAsk()).toEqual({ question: '這句要怎麼處理？(Jev：知識旁問 99%)', options: [NEW_NOTE_LABEL, MAIN_LABEL] })
+    expect(r).toMatchObject({ asked: true, choice: 'new', decision: { kind: 'sidebar', attach: 'root', route: { label: 'new', confidence: 0.99, source: 'ask' } } })
+  })
+
+  test('a low-confidence main_task asks too; 送進主線 goes to the main line', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.32), askAnswer: MAIN_LABEL })
     const r = await routePrompt(f.ports, opts, 'x')
-    expect(r.decision).toMatchObject({ kind: 'sidebar', attach: 'root' })
-    expect(r.asked).toBe(ASK_OPTIONS[1])
+    expect(f.lastAsk()?.question).toBe('這句要怎麼處理？(Jev：主線任務 32%)')
+    expect(r).toMatchObject({ asked: true, choice: 'main', decision: { kind: 'main' } })
   })
 
-  test('the ask shows the confidence Jev had: 這句要進主線還是旁支？(32%)', () => {
-    expect(askQuestion({ route: { label: 'main_task', confidence: 0.318 }, isFollowup: 0, needsProjectCtx: 0 })).toBe('這句要進主線還是旁支？(32%)')
+  test('with an active thread the dialog offers it, ordered by is_followup', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.9, 0.8), askAnswer: '接在「What is CRDT」下' })
+    await startNote(f.ports, opts, { question: 'What is CRDT about?', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    const r = await routePrompt(f.ports, opts, 'and conflicts?')
+    expect(f.lastAsk()?.options).toEqual(['接在「What is CRDT」下', NEW_NOTE_LABEL, MAIN_LABEL])
+    expect(r).toMatchObject({ choice: 'followup', decision: { kind: 'sidebar', attach: 'followup' } })
   })
 
-  test('a dismissed ask keeps the prompt in the main line', async () => {
-    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.4) })
-    expect((await routePrompt(f.ports, opts, 'x')).decision).toEqual({ kind: 'main' })
+  test('a dismissed dialog keeps the prompt in the main line', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.9) })
+    expect(await routePrompt(f.ports, opts, 'x')).toMatchObject({ decision: { kind: 'main' }, asked: true, choice: null })
   })
 
-  test('a Jev failure (bad JSON) also goes to the main line', async () => {
+  test('a Jev failure (bad JSON) also goes to the main line, no dialog', async () => {
     const f = fake({ typesafeKey: 'k', jev: () => ({ nope: true }) })
     expect((await routePrompt(f.ports, opts, 'x')).decision).toEqual({ kind: 'main' })
     expect(f.asked()).toBe(0)
   })
 })
 
-describe('routing samples and feedback', () => {
-  test('a Jev decision is kept; feedback marks it', async () => {
-    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.65, 0.1, 0.69) })
+describe('feedback records (feedback:<root>:<id>)', () => {
+  test('every prompt Jev saw is kept with its call, its confidence and the choice', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.65, 0.1, 0.69), askAnswer: NEW_NOTE_LABEL })
     const routed = await routePrompt(f.ports, opts, '為什麼我們這裡用 session cookie？')
-    await recordRoute(f.ports, opts, '為什麼我們這裡用 session cookie？', routed, 'node-1')
-    expect(await giveFeedback(f.ports, { verdict: 'wrong', expected: 'project_question', source: 'command' })).toBe(true)
-    const [s] = await listSamples(f.kv, ROOT)
-    expect(s).toMatchObject({
+    await recordFeedback(f.ports, opts, '為什麼我們這裡用 session cookie？', routed, 'node-1')
+    const [r] = await listRecords(f.kv, ROOT)
+    expect(r).toMatchObject({
       prompt: '為什麼我們這裡用 session cookie？',
       jev: { route: 'sidebar_knowledge', confidence: 0.65, needsProjectCtx: 0.69 },
       thresholds: { route: 0.6, followup: 0.6, needsCtx: 0.3 },
-      decision: 'sidebar',
+      asked: true,
+      outcome: 'new',
+      choice: 'new',
+      choiceSource: 'ask',
       nodeId: 'node-1',
-      feedback: { verdict: 'wrong', expected: 'project_question', source: 'command' },
-    } as Partial<RouteSample>)
+    } as Partial<FeedbackRecord>)
+    expect((await f.kv.keys()).some(k => k.startsWith(`feedback:${ROOT}:`))).toBe(true)
   })
 
-  test('when the user was asked, their answer is the label', async () => {
-    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.4), askAnswer: ASK_OPTIONS[2] })
-    const routed = await routePrompt(f.ports, opts, 'and then?')
-    await recordRoute(f.ports, opts, 'and then?', routed, null)
-    const [s] = await listSamples(f.kv, ROOT)
-    expect(s).toMatchObject({ decision: 'ask', feedback: { verdict: 'right', expected: 'sidebar', source: 'ask' } })
+  test('a main_task Jev let through has no choice until /sn feedback says one', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.9) })
+    await recordFeedback(f.ports, opts, 'what is a monad', await routePrompt(f.ports, opts, 'what is a monad'), null)
+    expect((await listRecords(f.kv, ROOT))[0]).toMatchObject({ asked: false, outcome: 'main', choice: null, choiceSource: null })
+    expect(await giveFeedback(f.ports, { choice: 'new' })).toMatchObject({ choice: 'new', choiceSource: 'command' })
+    expect(await giveFeedback(f.ports, { good: true })).toMatchObject({ choice: 'main' }) // good = what happened
   })
 
-  test('without Jev nothing is kept, and feedback says there is nothing to mark', async () => {
+  test('without Jev nothing is kept, and feedback has nothing to mark', async () => {
     const f = fake()
-    expect(await recordRoute(f.ports, opts, 'x', await routePrompt(f.ports, opts, 'x'), null)).toBeNull()
-    expect(await listSamples(f.kv, ROOT)).toEqual([])
-    expect(await giveFeedback(f.ports, { verdict: 'right', expected: null, source: 'command' })).toBe(false)
+    expect(await recordFeedback(f.ports, opts, 'x', await routePrompt(f.ports, opts, 'x'), null)).toBeNull()
+    expect(await listRecords(f.kv, ROOT)).toEqual([])
+    expect(await giveFeedback(f.ports, { good: true })).toBeNull()
   })
 })
 
@@ -318,14 +335,19 @@ describe('status line (under the prompt, no emoji)', () => {
 
 describe('the drop line and the log preview', () => {
   const v = (confidence: number) => ({ route: { label: 'sidebar_knowledge' as const, confidence }, isFollowup: 0, needsProjectCtx: 0 })
+  const note = (attach: 'root' | 'followup') => ({
+    kind: 'sidebar' as const,
+    attach,
+    answerer: 'fork' as const,
+    tag: { kind: 'none' as const },
+    route: { label: attach === 'root' ? 'new' : 'followup', confidence: 0.9, source: 'ask' as const },
+  })
 
-  test('the drop detail says who decided, how sure Jev was and where it went', () => {
-    expect(explainDrop('CRDT 是什麼？', { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.95, source: 'jev' } }, verdict: v(0.951), asked: null, activeTitle: null }))
-      .toBe('cc-sticky-note：Jev 95% 判斷是旁支 → 便利貼「CRDT 是什麼？」')
-    expect(explainDrop('那衝突怎麼解？', { decision: { kind: 'sidebar', attach: 'followup', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.88, source: 'jev' } }, verdict: v(0.88), asked: null, activeTitle: 'CRDT無衝突複製' }))
-      .toBe('cc-sticky-note：Jev 88% 判斷是追問「CRDT無衝突複製」 → 便利貼「那衝突怎麼解？」')
-    expect(explainDrop('x', { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 1, source: 'ask' } }, verdict: v(0.4), asked: '旁支（新 note）', activeTitle: null }))
-      .toBe('cc-sticky-note：你選了旁支 → 便利貼「x」')
+  test('the drop reason says where the note went (every note is the user pick)', () => {
+    expect(explainDrop('CRDT 是什麼？', { decision: note('root'), verdict: v(0.95), asked: true, choice: 'new', activeTitle: null })).toBe('cc-sticky-note：新的便利貼「CRDT 是什麼？」')
+    expect(explainDrop('那衝突怎麼解？', { decision: note('followup'), verdict: v(0.88), asked: true, choice: 'followup', activeTitle: 'CRDT無衝突複製' })).toBe(
+      'cc-sticky-note：接在「CRDT無衝突複製」下「那衝突怎麼解？」',
+    )
   })
 
   test('the log preview is one plain line, no Markdown marks', () => {
@@ -344,9 +366,10 @@ describe('the drop line and the log preview', () => {
     expect([...plainPreview(md, 10)]).toHaveLength(11) // 10 + …
   })
 
-  test('the drop card quotes at most 24 characters of the question', () => {
+  test('the drop reason quotes at most 24 characters of the question', () => {
     const long = '為什麼分散式系統裡的 CRDT 可以不靠中央伺服器就讓所有副本最後一致？'
-    const line = explainDrop(long, { decision: { kind: 'sidebar', attach: 'root', answerer: 'fork', tag: { kind: 'none' }, route: { label: 'sidebar_knowledge', confidence: 0.9, source: 'jev' } }, verdict: v(0.9), asked: null, activeTitle: null })
-    expect(line).toBe(`cc-sticky-note：Jev 90% 判斷是旁支 → 便利貼「${[...long].slice(0, 24).join('')}…」`)
+    expect(explainDrop(long, { decision: note('root'), verdict: v(0.9), asked: true, choice: 'new', activeTitle: null })).toBe(
+      `cc-sticky-note：新的便利貼「${[...long].slice(0, 24).join('')}…」`,
+    )
   })
 })
