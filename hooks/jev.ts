@@ -33,8 +33,10 @@ export type JevInput = {
 }
 
 const CLIP = 300
+/** PLAN.md: Jev reads worse with a state of more than a few thousand characters; a pasted wall of text is cut here (the note keeps it whole). */
+export const PROMPT_CLIP = 1500
 
-const clip = (s: string) => ([...s].length > CLIP ? [...s].slice(0, CLIP).join('') + '…' : s)
+const clip = (s: string, n = CLIP) => ([...s].length > n ? [...s].slice(0, n).join('') + '…' : s)
 
 /** The `state` text, as PLAN.md「Jev 分類設計」lays it out. */
 export function buildState(input: JevInput): string {
@@ -46,11 +48,11 @@ export function buildState(input: JevInput): string {
     '',
     '[sidebar state]',
     `active_thread_title: ${input.activeTitle ?? 'none'}`,
-    `active_thread_last_question: ${input.activeLastQuestion ?? 'none'}`,
+    `active_thread_last_question: ${input.activeLastQuestion === null ? 'none' : clip(input.activeLastQuestion)}`,
     `main_turns_since_last_sidebar: ${input.mainTurnsSinceLastSidebar}`,
     '',
     '[new prompt]',
-    input.prompt,
+    clip(input.prompt, PROMPT_CLIP),
   ].join('\n')
 }
 

@@ -90,3 +90,13 @@ describe('summary + fork prompts', () => {
     expect(p.endsWith('[question]\nNext?')).toBe(true)
   })
 })
+
+describe('jev state stays small', () => {
+  test('a pasted wall of text is cut to 1500 characters, the last question to 300', () => {
+    const s = buildState(input({ prompt: 'x'.repeat(12000), activeTitle: 't', activeLastQuestion: 'y'.repeat(12000) }))
+    expect(s).toContain('x'.repeat(1500) + '…')
+    expect(s).not.toContain('x'.repeat(1501))
+    expect(s).toContain('active_thread_last_question: ' + 'y'.repeat(300) + '…')
+    expect(s.length).toBeLessThan(3000)
+  })
+})

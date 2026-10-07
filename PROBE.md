@@ -34,6 +34,8 @@
 - **drop 卡片**的說明改成「cc-sticky-note：新的便利貼「…」」／「接在「<標題>」下「…」」（便利貼一定是你選的，不再寫「Jev 96% 判斷是…」）。
 - **本機與遠端同一套**：`composer` 和 `bridge` 不分流，沒有 remoteDeliver / remoteBehavior / passthrough；上一節「建議」的 (a)(b)(c) 不採用。RC1（B 看不到 drop 提示等）照舊，但對話框會到 B，你在 B 上選了才會建便利貼，所以 B 上的「話被吞掉」只剩選完之後那一下。RC4 為已知問題。
 
+**pane 被拒絕畫（10/07 晚，你回報的）**：「ui.render (Pane) refused: a text child longer than 10000 characters」。`Text` 與 `Markdown` 一段最多 10000 字（型別檔 MarkdownProps / CodeProps 有寫），超過就整棵樹被拒、引擎改畫自己的。原因是 `2026-apac-hpcai` 專案有一張便利貼的**問題本身 11810 字**（一大段貼上的內容）。已修：卡片裡的問題只顯示前 300 字並標「（共 N 字）」，答案超過 9000 字截斷並註明（`pane.tsx` `shownQuestion` / `shownAnswer`）；送給 Jev 的新的這句截到 1500 字、`active_thread_last_question` 截到 300 字（`jev.ts`；完整內容照樣存進便利貼、照樣送去回答）。有測試，拿掉修正會重現同一個錯誤。
+
 **Desktop 的 side chat 有沒有 hook**：型別檔（2.1.289）裡沒有任何 side chat 的事件或 API（搜尋 side chat / side question / btw / sidechain 都沒有；事件只有 prompt / session / turn / tool / ui 這幾類）。mod 不能打開 side chat、也不能把內容寫進去。⏳ 沒驗：side chat 裡自己送出的 prompt 會不會經過這個 mod 的 `prompt.submit`、`origin` 是什麼。要的話可以再加一個探針（在 side chat 打一句、看紀錄）。
 
 ## Remote Control（10/07 下午）

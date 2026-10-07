@@ -68,6 +68,25 @@ const clip = (s: string, n: number) => {
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
 }
 
+/**
+ * A Text or Markdown holds at most 10000 characters, or the whole pane is refused
+ * and the engine draws its own (seen with an 11,810-character pasted question).
+ */
+export const QUESTION_SHOWN = 300
+export const ANSWER_SHOWN = 9000
+
+/** The question as the card shows it: one line, its first 300 characters, and the full length when cut. */
+export function shownQuestion(q: string): string {
+  const n = [...q].length
+  return n > QUESTION_SHOWN ? `${clip(q, QUESTION_SHOWN)}（共 ${n} 字）` : clip(q, QUESTION_SHOWN)
+}
+
+/** The answer as the card shows it: whole up to 9000 characters, newlines kept. */
+export function shownAnswer(a: string): string {
+  const cps = [...a]
+  return cps.length > ANSWER_SHOWN ? `${cps.slice(0, ANSWER_SHOWN).join('')}\n\n_（答案共 ${cps.length} 字，只顯示前 ${ANSWER_SHOWN} 字）_` : a
+}
+
 export type PaneData = { tree: Tree | null; selectedId: string | null; sessionId: string; pending: number }
 
 export type PaneActions = {
@@ -130,9 +149,9 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
               {step.title} — {clip(step.summary ?? step.answer, 90)}
             </Text>
           ))}
-          <Text bold>Q {selected.question}</Text>
+          <Text bold>Q {shownQuestion(selected.question)}</Text>
           <Markdown
-            text={selected.answer !== '' ? selected.answer : selected.promotedAt !== null ? '_這題在主線回答。_' : '_回答中…_'}
+            text={selected.answer !== '' ? shownAnswer(selected.answer) : selected.promotedAt !== null ? '_這題在主線回答。_' : '_回答中…_'}
           />
           {Input && (
             <Input
