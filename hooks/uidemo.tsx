@@ -5,8 +5,8 @@ import type { ElementTable, RenderElement } from 'claude-code'
 
 export const DEMO_SITES = [
   ['A', 'AbovePrompt', '輸入框上方的帶子（現在的位置）：一整列，可放按鈕'],
-  ['B', 'SessionMode', '輸入框下方、最右邊的模式標籤（和 Auto / 模型那排同一列）：幾個字'],
-  ['C', 'PromptHint', '輸入框下方的灰色提示行：一行字（會蓋掉原本的提示）'],
+  ['B2', 'SessionMode', '輸入框下方、最右邊的模式標籤（和 Auto / 模型那排同一列）：幾個字'],
+  ['C2', 'PromptHint', '輸入框下方的灰色提示行：一行字'],
   ['D', '$.ui.status', '輸入框下方的狀態列：一行字，不能點'],
   ['E', 'Spinner', '回答進行中那一列（只在 Claude 工作時出現）'],
   ['F', 'UserMessage', '對話裡每一則你的訊息旁：小徽章，可放按鈕'],

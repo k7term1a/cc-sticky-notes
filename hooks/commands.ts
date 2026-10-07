@@ -83,6 +83,7 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
         return { text: 'UI 位置展示：關' }
       }
       p.ui.status(`${label('D')} 📌 Sticky Notes（狀態列）`)
+      await p.ui.openPane() // I: the pane is part of the map
       p.ui.toast(`${label('J')} toast 在這裡`)
       for (const line of DEMO_LEGEND) p.ui.log(`${label('K')} ${line}`)
       return { text: 'UI 位置展示：開。每個能放 UI 的地方都標了〔字母〕，對照表見下方卡片與灰字。' }

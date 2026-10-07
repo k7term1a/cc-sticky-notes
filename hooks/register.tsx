@@ -182,17 +182,35 @@ export const register: Register = (on, options) => {
   on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
 
   // ---- /sticky-note ui-demo: label every place the mod can draw (uidemo.tsx) ----
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) =>
-    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, modes: [...e.props.modes, `${label('B')}📌 2`] } }) : next(e),
-  )
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) =>
-    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, hint: `${label('C')}📌 Sticky Notes · ${e.props.hint}` } }) : next(e),
-  )
+  // B / C: the first try rewrote props (modes / hint) and the desktop drew nothing new;
+  // this round draws the plugin's own tree there instead (B2 / C2).
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (!(await read($, uiDemoAtom))) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box gap={1}>
+        <Text dimColor>{e.props.modes.join(' & ')}</Text>
+        <Text>{label('B2')}📌 2</Text>
+      </Box>
+    )
+  })
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (!(await read($, uiDemoAtom))) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box gap={1}>
+        <Text>{label('C2')}📌 Sticky Notes</Text>
+        <Text dimColor>{e.props.hint}</Text>
+      </Box>
+    )
+  })
   on('ui.render', { component: 'Spinner' }, async ($, e, next) =>
     (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, word: `${label('E')}${e.props.word}` } }) : next(e),
   )
+  // No isExpanded check here: the desktop has no ctrl+o, so its rows always read
+  // as expanded, and skipping those drew nothing there (F missing on the desktop).
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    if (e.props.isExpanded || !(await read($, uiDemoAtom))) return next(e)
+    if (!(await read($, uiDemoAtom))) return next(e)
     return userBadge($.ui.resolve(e), await next(e))
   })
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
