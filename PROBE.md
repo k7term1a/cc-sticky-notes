@@ -21,6 +21,56 @@
 
 ---
 
+## 〇之二、第三輪（10/07 中午）：決定已套用、M1 完成
+
+用 Desktop 新內建的 **2.1.289**（`.claude-plugin/types/claude-code/index.d.ts` 首行已是 2.1.289）跑 validate / test / 探針；PATH 上的 `claude` 仍是 2.1.283。
+
+**你的決定 → 程式位置**
+
+| 項目 | 怎麼做的 | 位置 |
+| --- | --- | --- |
+| P1 Ports | 照舊 | `hooks/ports.ts`、`register.ts` 的 `portsOf` |
+| P2 drop 提示 | drop reason「→ 便利貼：<前 40 字>」就是透明訊息，不另外 log | `notes.ts` `dropReason` |
+| P3 拆 key | `node:<root>:<id>`、`outline:<root>:<id>`、`active:<root>:<sessionId>`、`meta:<root>`；`roots` **和每個節點的 `children`** 都在讀取時由 `parentId` 依 `anchor.at` 推出、不存。只寫有變的 key（`saveDiff`）。`children` 也不存是因為存了的話，兩個 session 同時在同一個父節點下追問，父節點那個 key 又會互蓋 | `tree.ts` |
+| P4 | 回流只進目前 session；`promotedTo` → `promotedIn` | `types/index.d.ts`、`tree.ts` `markPromoted` |
+| P6 | `anchor.messageId`：`session.append` door='prompt' 記 uuid（✅ 實測正確，見下） | `register.ts` |
+| P7 | 帶子「開啟」`hotkey="s"`；`$.ui.open` 沒有 placement | `pane.tsx` |
+| P8 | 拿掉 `$.prompt.suggest`；帶子顯示「正在追問：<title>」 | `pane.tsx` `bandView` |
+| P9 (a) | fork 以外的答案在 pane 標「無專案脈絡」，`$.ui.log` 的答案行也標 | `pane.tsx` `contextMark`、`notes.ts` |
+| P10 (b) | `session.append` hook 把 `/sticky-note new <問題>` 紀錄的 args 改成 `new (sticky note)`（✅ 實測） | `commands.ts` `maskNewArgs`、`register.ts` |
+| D3 | 缺 Jev（沒 key、錯誤、回應壞掉）→ 全部進主線，不跳對話框 | `route.ts` `decide(null)`、`notes.ts` |
+| D6 | 專案 key = `repo()?.root ?? root()` | `register.ts` `portsOf.projectRoot` |
+| D7 | `NEEDS_CTX_AT = 0.3` | `route.ts` |
+| D8 | `project_question` 建書籤節點（`promotedAt/promotedIn` = 當下），不成為 activeThread | `notes.ts` `bookmarkNote`、`tree.ts` `addNode(..., { makeActive: false })` |
+| D15 (a) + 回饋接口 | `project_question` 的描述加了「我們 / 這裡 / 這個專案」的中英例子；另做路由回饋接口（下節） | `jev.ts`、`hooks/feedback.ts` |
+| 摘要語言 | 跟著問題；中文一律繁體（✅ 實測已是繁體） | `digest.ts` `LANGUAGE_RULE`（fork / 知識旁路也加了） |
+| OpenAI 推理 | `userConfig.openaiReasoningEffort`（預設 `minimal`，`none` = 不送參數） | `plugin.json`、`providers/openai.ts` |
+| 缺 OpenAI key | `summaryProvider = openai` 但沒 key → 退回 Claude，toast 一次（PLAN 新規則） | `providers/types.ts` `withFallback` |
+| 金鑰來源（你中途改的） | 不需要 Windows 環境變數：環境變數 → `~/.claude/sticky-notes/.env` → mod 資料夾的 `.env`；**不讀目前專案的 `.env`**。PLAN.md「金鑰」段已同步改寫 | `hooks/secrets.ts` |
+
+**路由回饋接口（D15）**：每次 Jev 判斷記一筆 `route:<root>:<id>`（prompt 前 200 字、Jev 原始機率、當時門檻、決策、節點 id；每專案上限 500，只在本機）。標記：`/sticky-note feedback good|bad [main|sidebar|followup|project]`（中文「對 / 錯 主線 / 旁支 / 追問 / 專案」也可）、`$.ui.ask` 的選擇自動當正解、M2 的「重新分類」接 `source: 'reclassify'`。`/sticky-note calibrate` 用 `$.ui.log` 印出各門檻的「自動幾句、對幾句、要問幾成」。UI 還很陽春，之後再調。
+
+**第三輪實測**（真實引擎、`--input-format stream-json`、**不帶任何金鑰環境變數**）
+
+| 項目 | 結果 |
+| --- | --- |
+| 金鑰從檔案讀 | ✅ `/sticky-note doctor` → 兩把都「有（C:\Users\kay13\desktop\cc-sticky-notes\.env）」，查找順序 `~/.claude/sticky-notes/.env → <mod>/.env`；`/sticky-note new` 的 fork 與標題摘要都正常 |
+| P10 遮罩 | ✅ session 檔裡的指令紀錄變成 `<command-args>new (sticky note)</command-args>`，對話 row 裡已沒有問題原文。佇列紀錄（`queue-operation enqueue`）仍有原文，和 P2 相同，無法避免 |
+| `anchor.messageId` | ✅ 等於第一句主線 prompt 的 uuid（`53e80965…`） |
+| 拆 key 後的 store | ✅ 只有 `node:<root>:<id>` 與 `active:<root>:<sessionId>` 兩個 key，節點不含 children |
+| 摘要語言 | ✅ 標題「TCP流量控制」、摘要與答案皆繁體 |
+| ⚠ **新：`session.messages()` 會把 slash command 紀錄當成 user 訊息** | ✅ 實測：`mainSnippet` 抓到的是 `<command-name>/sticky-note</command-name>…`。**已修**：`notes.ts` `isTypedPrompt` 排除 `<command-…>`、`<local-command-…>`、`<system-reminder>` 開頭的訊息，Jev 的 `[recent main-line context]` 也一起受惠；有測試 |
+| `claudeModel` 可以設定嗎 | ✅ `$.model.complete` 接受別名（`sonnet`、`opus`）與完整 id（`claude-haiku-4-5-20251001`）。打錯名稱**不會讓 mod 壞掉**：回 `api-error 404 model_not_found`，標題退回問題前 12 字。它只管統整層（標題、摘要、知識旁路）；fork 旁答永遠用主線模型（API 限制） |
+
+**還沒驗、需要你在 Desktop 做的**（mod 已經靠 `CLAUDE_CODE_PLUGIN_DIRS` 載入新 session；建議把 key 移到 `~/.claude/sticky-notes/.env`，或先用 repo 這份）：
+1. 開新 session，打 `/sticky-note doctor`：兩把 key 都要「有」。
+2. 打一句專案任務（例如「幫我看一下 README」）→ 應該直接進主線、不跳對話框。
+3. 打「TCP 的 backpressure 是什麼原理？」→ 畫面只剩一行「→ 便利貼：…」，輸入框**有沒有卡住**（這就是「hook 內 await fork 的 UI 行為」；目前實作是 drop 後在背景 fork，理論上不會卡）；幾秒後出現 toast 與一行 dim 的 📌 答案。
+4. 接著打「那 Node stream 的 highWaterMark 呢？」→ 看會不會掛成追問（帶子上要顯示「正在追問：…」）。
+5. 打 `/sticky-note new 什麼是 CRDT` → 用 ctrl+o 看 transcript：指令那行應該是 `new (sticky note)`。
+6. 看帶子（📌 Sticky Notes n · 正在追問 … · 開啟）、按 `s` 或點「開啟」開 pane、pane 的位置 / 能不能拖、drop 提示行長怎樣（D13）。
+7. 隨手 `/sticky-note feedback good` 或 `bad project`，最後 `/sticky-note calibrate` 看輸出。
+
 ## 〇、第二輪實測（10/07 上午，CLI 已登入、金鑰已放進 `.env`）
 
 第一輪被擋住的探針都補跑了。下面各題標題的狀態已同步更新；這一節是摘要和新發現。
@@ -233,6 +283,10 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 ## 四、待討論
 
+> 10/07 中午：下表第一、二輪的項目你都已決定，套用情形見第〇之二節。目前沒有新的待決項目；只剩上面「需要你在 Desktop 做的」檢查，以及兩個風險先記著：
+> - **讀取量**：拆 key 之後每次載入樹要對每個節點各呼叫一次 `$.store.get`（每次 prompt 路由前、每次寫入前都會載入）。幾十個節點沒感覺；PLAN 估的上千節點時會不會變慢，還沒量。若變慢，M3 可以加「只在 session.start 與 pane 開啟時全量載入，其餘只讀寫單一節點」。
+> - **金鑰檔位置**：我選了 `~/.claude/sticky-notes/.env` 當正式位置、mod 資料夾的 `.env` 當開發位置，不讀專案 `.env`。要換位置只改 `secrets.ts` 的 `keyFiles`。
+
 | # | 問題 | 我目前的處理 / 預設 | 需要你決定的 |
 | --- | --- | --- | --- |
 | D1 | ~~讓模型相關探針能跑~~ | ✅ 已解決（CLI 已登入），結果見第〇節 | 只剩互動 session 的 UI 卡頓 / 視覺 |
@@ -267,7 +321,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **61 pass / 0 fail**（6 個檔）
+- `claude plugin test .`：✅ **78 pass / 0 fail**（7 個檔，第三輪；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動

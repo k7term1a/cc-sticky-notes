@@ -1,7 +1,10 @@
 // /sticky-note and its subcommands.
+// A command's `{ text }` is a transcript row the model also reads, so anything
+// long or private goes to $.ui.log / toast instead and the command returns {}.
 import type { CommandRunResult } from 'claude-code'
 
-import { change, dropReason, startNote, type Options } from './notes'
+import { calibrate, formatCalibration, listSamples, parseFeedback } from './feedback'
+import { change, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -9,12 +12,12 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | promote | outline | refresh | digest | export | mode | stats',
-  argumentHint: '[new <問題> | back | …]',
+  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | promote | outline | refresh | digest | export | mode | stats',
+  argumentHint: '[new <問題> | back | feedback good|bad [main|sidebar|followup|project] | calibrate]',
 }
 
 const LATER: Record<string, string> = {
-  promote: 'M3',
+  promote: 'M2',
   outline: 'M3',
   refresh: 'M3',
   digest: 'M3',
@@ -26,6 +29,19 @@ const LATER: Record<string, string> = {
 export function parseArgs(args: string): { sub: string; rest: string } {
   const m = /^\s*(\S*)\s*([\s\S]*)$/.exec(args)
   return { sub: (m?.[1] ?? '').toLowerCase(), rest: (m?.[2] ?? '').trim() }
+}
+
+/** The args a /sticky-note new record keeps in the transcript (PROBE.md P10). */
+export const NEW_ARGS_MASK = 'new (sticky note)'
+
+/**
+ * Rewrites the transcript record of `/sticky-note new <問題>` so the question
+ * does not stay in the main context. Returns null when the text is not that record.
+ */
+export function maskNewArgs(text: string): string | null {
+  if (!text.includes(`<command-name>/${COMMAND}</command-name>`)) return null
+  const re = /<command-args>\s*new\b[\s\S]*?<\/command-args>/
+  return re.test(text) ? text.replace(re, `<command-args>${NEW_ARGS_MASK}</command-args>`) : null
 }
 
 export async function runCommand(p: Ports, opts: Options, args: string): Promise<CommandRunResult> {
@@ -50,6 +66,22 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
     case 'back': {
       const sessionId = await p.sessionId()
       await change(p, t => setActive(t, sessionId, null))
+      return {}
+    }
+    case 'feedback': {
+      const fb = parseFeedback(rest)
+      if (fb === null) return { text: '用法：/sticky-note feedback good|bad [main|sidebar|followup|project]' }
+      const ok = await giveFeedback(p, { ...fb, source: 'command' })
+      p.ui.toast(ok ? `已記下：上一句分類${fb.verdict === 'right' ? '正確' : '錯誤'}${fb.expected ? `，應為 ${fb.expected}` : ''}` : '這個 session 還沒有可以回饋的分類')
+      return {}
+    }
+    case 'doctor': {
+      for (const line of await p.keys.report()) p.ui.log(line)
+      return {}
+    }
+    case 'calibrate': {
+      const lines = formatCalibration(calibrate(await listSamples(p.store, await projectKey(p))))
+      for (const line of lines) p.ui.log(line)
       return {}
     }
     default: {

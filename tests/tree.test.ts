@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Tree } from '../types'
+import type { KV } from '../hooks/ports'
 import {
   addNode,
   createOutline,
@@ -9,15 +10,15 @@ import {
   fallbackTitle,
   loadTree,
   markPromoted,
+  keys,
   mutateTree,
-  normalizeTree,
   pathTo,
   refreshOutline,
   removeNode,
   rootOf,
   setActive,
+  saveDiff,
   sideHistory,
-  treeKey,
   updateNode,
   visibleRoots,
   type NewNode,
@@ -26,16 +27,17 @@ import {
 const A = 'session-A'
 const B = 'session-B'
 
-const n = (id: string, sessionId = A, at = 1): NewNode => ({
+let clock = 0
+const n = (id: string, sessionId = A, at = ++clock): NewNode => ({
   id,
   question: `question ${id}`,
-  anchor: { sessionId, turnId: null, at, mainSnippet: '' },
+  anchor: { sessionId, turnId: null, messageId: null, at, mainSnippet: '' },
   route: { label: 'sidebar_knowledge', confidence: 0.9, source: 'jev' },
   answeredBy: 'claude-fork',
   answer: `answer ${id}`,
 })
 
-const add = (t: Tree, id: string, attach: Parameters<typeof addNode>[3], sessionId = A, at = 1) =>
+const add = (t: Tree, id: string, attach: Parameters<typeof addNode>[3], sessionId = A, at = ++clock) =>
   addNode(t, sessionId, n(id, sessionId, at), attach).tree
 
 describe('addNode', () => {
@@ -128,10 +130,10 @@ describe('history and lookup', () => {
     expect(t.nodes.r1?.summary).toBe('s')
   })
 
-  test('markPromoted records time and target', () => {
+  test('markPromoted records time and the session it was promoted in', () => {
     const t = markPromoted(add(emptyTree(), 'r1', { kind: 'root' }), 'r1', B, 99)
     expect(t.nodes.r1?.promotedAt).toBe(99)
-    expect(t.nodes.r1?.promotedTo).toBe(B)
+    expect(t.nodes.r1?.promotedIn).toBe(B)
   })
 })
 
@@ -209,26 +211,79 @@ describe('removeNode', () => {
   })
 })
 
-describe('store', () => {
-  test('normalizeTree tolerates junk', () => {
-    expect(normalizeTree(undefined)).toEqual(emptyTree())
-    expect(normalizeTree({ version: 1 })).toEqual(emptyTree())
-    expect(normalizeTree({ version: 2, roots: ['x'] }).roots).toEqual(['x'])
-  })
+/** An in-memory $.store: JSON copies, as the engine keeps them. */
+function memKV(): KV & { mem: Map<string, string> } {
+  const mem = new Map<string, string>()
+  return {
+    mem,
+    get: async k => (mem.has(k) ? JSON.parse(mem.get(k)!) : undefined),
+    set: async (k, v) => void mem.set(k, JSON.stringify(v)),
+    delete: async k => void mem.delete(k),
+    keys: async () => [...mem.keys()],
+  }
+}
 
-  test('treeKey strips trailing separators', () => {
-    expect(treeKey('C:\\proj\\')).toBe('tree:C:\\proj')
-    expect(treeKey('/home/me/proj/')).toBe('tree:/home/me/proj')
+describe('bookmarks', () => {
+  test('a node added with makeActive: false leaves activeThread alone', () => {
+    let t = add(emptyTree(), 'r1', { kind: 'root' })
+    t = addNode(t, A, { ...n('bm'), promotedAt: 5, promotedIn: A }, { kind: 'root' }, { makeActive: false }).tree
+    expect(t.activeThread[A]).toBe('r1')
+    expect(t.nodes.bm).toMatchObject({ parentId: null, promotedAt: 5, promotedIn: A })
   })
-
 })
 
-test('mutateTree round-trips through a KV (JSON copies, as $.store keeps them)', async () => {
-  const mem = new Map<string, string>()
-  const kv = { get: async (k: string) => (mem.has(k) ? JSON.parse(mem.get(k)!) : undefined), set: async (k: string, v: unknown) => void mem.set(k, JSON.stringify(v)) }
-  await mutateTree(kv, 'tree:/p', t => addNode(t, A, n('r1'), { kind: 'root' }).tree)
-  await mutateTree(kv, 'tree:/p', t => addNode(t, B, n('r2', B), { kind: 'root' }).tree)
-  const back = await loadTree(kv, 'tree:/p')
-  expect(back.roots).toEqual(['r1', 'r2'])
-  expect(back.activeThread).toEqual({ [A]: 'r1', [B]: 'r2' })
+describe('store layout (one key per node / outline / session)', () => {
+  test('round-trips, deriving roots and children', async () => {
+    const kv = memKV()
+    await mutateTree(kv, '/p/', t => add(add(t, 'r1', { kind: 'root' }), 'c1', { kind: 'followup' }))
+    await mutateTree(kv, '/p', t => add(t, 'r2', { kind: 'root' }, B))
+    const back = await loadTree(kv, '/p')
+    expect(back.roots).toEqual(['r1', 'r2'])
+    expect(back.nodes.r1?.children).toEqual(['c1'])
+    expect(back.activeThread).toEqual({ [A]: 'c1', [B]: 'r2' })
+    expect([...kv.mem.keys()].sort()).toEqual([keys.active('/p', A), keys.active('/p', B), keys.node('/p', 'c1'), keys.node('/p', 'r1'), keys.node('/p', 'r2')].sort())
+  })
+
+  test('children are not stored, so adding a child never rewrites the parent key', async () => {
+    const kv = memKV()
+    await mutateTree(kv, '/p', t => add(t, 'r1', { kind: 'root' }))
+    const parentBefore = kv.mem.get(keys.node('/p', 'r1'))
+    await mutateTree(kv, '/p', t => add(t, 'c1', { kind: 'followup' }))
+    expect(kv.mem.get(keys.node('/p', 'r1'))).toBe(parentBefore)
+    expect(JSON.parse(parentBefore!).children).toEqual([])
+  })
+
+  test('two sessions writing at once both survive (the M0 race, now on separate keys)', async () => {
+    const kv = memKV()
+    await mutateTree(kv, '/p', t => add(t, 'r1', { kind: 'root' }))
+    // both load the same snapshot before either writes
+    const a0 = await loadTree(kv, '/p')
+    const b0 = await loadTree(kv, '/p')
+    const a1 = add(setActive(a0, A, 'r1'), 'fromA', { kind: 'followup' }, A)
+    const b1 = add(setActive(b0, B, 'r1'), 'fromB', { kind: 'followup' }, B)
+    await saveDiff(kv, '/p', a0, a1)
+    await saveDiff(kv, '/p', b0, b1)
+    const back = await loadTree(kv, '/p')
+    expect(back.nodes.r1?.children).toEqual(['fromA', 'fromB'])
+    expect(back.activeThread).toEqual({ [A]: 'fromA', [B]: 'fromB' })
+  })
+
+  test('removed nodes and outlines are deleted; tags go to meta', async () => {
+    const kv = memKV()
+    await mutateTree(kv, '/p', t => createOutline(add(add(t, 'r1', { kind: 'root' }), 'r2', { kind: 'root' }), { id: 'o1', title: '', outline: '', memberIds: ['r1'], createdAt: 0 }).tree)
+    expect(kv.mem.has(keys.outline('/p', 'o1'))).toBe(true)
+    await mutateTree(kv, '/p', t => ({ ...removeNode(t, 'r1'), tags: ['db'] }))
+    expect(kv.mem.has(keys.node('/p', 'r1'))).toBe(false)
+    expect(kv.mem.has(keys.outline('/p', 'o1'))).toBe(false)
+    expect(JSON.parse(kv.mem.get(keys.meta('/p'))!)).toEqual({ version: 2, tags: ['db'], mainDigest: null })
+  })
+
+  test('projects do not see each other; a node whose parent vanished shows as a root', async () => {
+    const kv = memKV()
+    await mutateTree(kv, '/p', t => add(add(t, 'r1', { kind: 'root' }), 'c1', { kind: 'followup' }))
+    await mutateTree(kv, '/q', t => add(t, 'other', { kind: 'root' }))
+    expect((await loadTree(kv, '/q')).roots).toEqual(['other'])
+    await kv.delete(keys.node('/p', 'r1'))
+    expect((await loadTree(kv, '/p')).roots).toEqual(['c1'])
+  })
 })

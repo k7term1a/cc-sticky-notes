@@ -14,14 +14,15 @@ Oct 6, 2026 · @楷奇
 
 **成功標準（M4 完成時）**
 
-1. 在主線打一句知識性問題，主線 transcript 不出現它，答案在 pane 出現，延遲小於 5 秒。
+1. 在主線打一句知識性問題，Claude 的 context 不出現它（畫面上只有一行「→ 便利貼：…」的提示），答案在 pane 出現，延遲小於 5 秒。
 2. 連續追問三層，每層都掛在同一條旁支下；中途回到專案任務再問新問題，Jev 會開新 root 而不是接到舊旁支；點回某個節點再問，會在它底下多一個子節點。
 3. 點 pane 上任一節點後，直接在主 prompt 框打字就是追問它，答案出在 pane；主線一樣乾淨。
-4. 同一專案開幾個 session 都看同一棵樹（fork 的、為了 context 長度重開的都算）；每個 session 各自記自己正在追問哪個節點。
+4. 同一專案開幾個 session 都看同一棵樹（fork 的、為了 context 長度重開的、不同 worktree 的都算）；每個 session 各自記自己正在追問哪個節點；兩個 session 同時寫入不會互相蓋掉。
 5. 選幾個 root 按「整合」，統整層產出一個大綱分組；大綱只有一層，不能再被整合。
-6. 旁支結論能一鍵回流到本 session 或同專案的另一個 live session。
+6. 旁支結論能一鍵回流進目前這個 session；要帶進另一個 session，就在那個 session 開 pane、點同一個節點、回流。
 7. 統整層預設走 Claude 訂閱（`$.model.complete`，可選模型與 effort），裝了就能用；設定 `summaryProvider = openai` 可改走 OpenAI 免費額度，兩條路功能相同。
 8. 不論哪個供應者，除了每節點的標題與摘要之外，會花額度的動作全部由我按下去才發生；OpenAI 超過 cap 就暫停並詢問。
+9. 沒有 Jev key 時所有輸入都進主線，只有 `/sticky-note new` 和 pane 追問框能建 note；不會跳對話框問我。
 
 ## 核心概念
 
@@ -129,6 +130,8 @@ openai 模式超過每日 cap → 該類動作暫停 + toast，問使用者「�
 | 統整層，預設 | Claude，`$.model.complete`，走使用者的訂閱；`claudeModel`（預設 `haiku`）、`claudeEffort`（預設 `low`）可調 | 自動：每節點標題 + 三句摘要、`__new__` 時取標籤名。手動：整合大綱、重算、主線摘要、合併標籤、digest / export。以及不需專案脈絡的知識旁路 | 需要專案脈絡的旁問 |
 | 統整層，選配 | OpenAI 免費額度（小模型組，如 gpt-5-mini），`summaryProvider = openai` | 和上面完全相同的工作清單 | 需要專案脈絡的旁問；`openaiContextMode = off` 時任何含專案內容的工作 |
 
+M0 實測註記：`$.model.fork` 只接受 `{ prompt }`，不能指定模型或 system，旁答永遠用主線同一個模型；旁支歷史直接串進 prompt 文字。所以旁答的成本和主線一樣，便宜的只有統整層。
+
 ## 統整層與模型供應者
 
 統整層負責所有「寫字整理」的工作：標題、摘要、大綱、主線摘要、標籤整理、匯出，以及不需專案脈絡的知識旁路。它背後的模型是一個設定 `summaryProvider`，兩個值功能完全相同：
@@ -173,25 +176,24 @@ openai 模式超過每日 cap → 該類動作暫停 + toast，問使用者「�
 全部存在 `$.store`，以專案根目錄（`$.session.root()`）為 key 隔離不同專案。
 
 ```ts
-// $.store key: `tree:${projectRoot}` —— 以專案根目錄隔離，同專案的所有 session 共用（fork 的、為了 context 長度重開的都算）
-interface Tree {
-  version: 2
-  nodes: Record<string, Node>
-  roots: string[]              // 頂層旁支的 node id，依建立時間
-  outlines: Record<string, Outline>
-  activeThread: Record<string, string | null>  // key = sessionId；每個 session 各自記「目前追問中」的節點
-  tags: string[]               // 既有標籤清單，餵給 Jev 當選項
-  mainDigest: { text: string; updatedAtTurn: string; updatedAt: number; sessionId: string } | null  // 手動更新
-}
+// $.store 佈局：拆成多個 key，因為 $.store 沒有 compare-and-set，同一 key 的併發 read-modify-write 是 last-writer-wins（M0 實測掉寫入）；
+// 不同 key 之間互不覆蓋、讀取即時。<root> = 專案 key = $.session.repo()?.root ?? $.session.root()，同 repo 不同 worktree 共用一棵樹。
+//   node:<root>:<id>              → TreeNode
+//   outline:<root>:<id>           → Outline
+//   active:<root>:<sessionId>     → string | null   每個 session 自己的「目前追問中」
+//   meta:<root>                   → { version: 2, tags: string[], mainDigest: {...} | null }
+//   openaiUsage:<UTC 日期>        → number
+// roots 不另外存，由 parentId === null 的節點依 anchor.at 排序推出來。
 
 // 一般節點：唯一的樹結構，root → 追問鏈；一個節點可以有多個子節點，深度不限
-interface Node {
+interface TreeNode {
   id: string                   // crypto.randomUUID()
   parentId: string | null      // null = root
   outlineId: string | null     // 只有 root 會被設；指向所屬大綱，最多一個
   anchor: {                    // 書籤：好奇發生在主線哪裡
     sessionId: string          // 哪個 session 問的
-    turnId: string | null
+    turnId: string | null      // 問這題之前主線最後一個 turn（turn.start 記下）；idle 時送出的 prompt 本身沒有 turnId
+    messageId: string | null   // 前一則主線 user 訊息的 uuid（session.append door='prompt' 記下）；UserMessage 徽章與 $.ui.scroll 都靠它（M2）
     at: number                 // epoch ms
     mainSnippet: string        // 當時主線最後一句 user prompt，前 120 字；pane 不顯示，除錯用
   }
@@ -203,7 +205,7 @@ interface Node {
   tags: string[]
   route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }  // confidence 只給校正門檻看
   promotedAt: number | null    // 回流的時間，null = 未回流
-  promotedTo: string | null    // 回流到哪個 sessionId
+  promotedIn: string | null    // 在哪個 session 回流的
   children: string[]
 }
 
@@ -220,14 +222,14 @@ interface Outline {
 
 **規則**
 
-- **新 root 由 Jev 決定**：`is_followup = false`（或本 session 沒有 `activeThread`）→ `parentId = null`，推進 `roots`，本 session 的 `activeThread = 新 id`。
-- **追問掛在目前節點下**：`is_followup = true` → `parentId = activeThread[sessionId]`，`activeThread = 新 id`。
-- **一個節點可以長出多個子問題**：點回某個較上層的節點再問，新節點就掛在它底下、和既有子節點並列。所以「root → 多條分支 → 各自再追問」是自然發生的，不需要特別操作。
-- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。
-- 整合大綱：只接受 root；已屬於別的大綱的 root 會被搬過來（UI 提示）；大綱本身不能被選取。
+- **新 root 由 Jev 決定**：`is_followup = false`（或本 session 沒有 `activeThread`）→ `parentId = null`，本 session 的 `activeThread = 新 id`。
+- **追問掛在目前節點下**：`is_followup = true` → `parentId = active:<root>:<sessionId>`，`activeThread = 新 id`。
+- **一個節點可以長出多個子問題**：點回某個較上層的節點再問，新節點就掛在它底下、和既有子節點並列。
+- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。`project_question` 的書籤節點不會成為 `activeThread`。
+- 整合大綱：只接受 root；已屬於別的大綱的 root 會被搬過來（UI 提示）；成員被搬光的舊大綱直接刪除；大綱本身不能被選取。
 - 成員之後有新追問 → 該大綱 `staleSince = now`，不自動重算。
-- 回流只送 `title + summary`，不送全文；目標可以是本 session 或 `$.session` 能列出的同專案 live session（用 `$.session.send`）。
-- 跨 session：樹共用、`activeThread` 各自一份、`anchor.sessionId` 區分來源，pane 可篩「只看本 session」。
+- 回流只送 `title + summary`，不送全文，目標是目前這個 session（`$.prompt.submit({ asUser: true })`）。不做跨 session 傳送：樹本來就是共用的，要帶進另一個 session 就到那邊開 pane、點同一個節點、回流。
+- 跨 session：節點、大綱各自一個 key，兩邊同時寫不互蓋；`activeThread` 每 session 一份；`anchor.sessionId` 區分來源，pane 可篩「只看本 session」。
 
 **容量**：`$.store` 上限 4 MiB。單節點估 2 KB，約可存 2,000 節點。M3 加「封存」：超過 1,500 節點時把最舊的 roots 匯出到 `.claude/sticky-notes/archive-YYYY-MM.json` 再從 store 移除。
 
@@ -272,7 +274,9 @@ main_turns_since_last_sidebar: <整數>
 
 `is_followup ≥ 0.6` 且 route 為 sidebar → 掛在 `activeThread` 下；否則開新 root。`tag` 選到 `__new__` 或信心 < 0.5 → 呼叫 OpenAI 取名（見下節），取到的名字 push 進 `tree.tags`。
 
-**門檻 0.6 是起始值**，M1 驗收時用自己 50 句真實 prompt 校正。Jev 的回傳帶校準過的機率，所以門檻可以直接對應「我能接受幾成分錯」。
+`is_followup ≥ 0.6` 且 route 為 sidebar → 掛在本 session 的 `activeThread` 下；否則開新 root。`needs_project_ctx ≥ 0.3` 就走 `$.model.fork`（偏保守：寧可多用看得到脈絡的 Claude，少把東西送出去）。`tag` 選到 `__new__` 或信心 < 0.5 → 統整層取名，取到的名字 push 進 `tree.tags`。
+
+**沒有 Jev key 時**：不分類、不問，所有輸入都走主線；只有 `/sticky-note new` 和 pane 追問框能建 note。不用 `$.model.classify` 當退路——它沒有信心值，分錯也看不出來，等於把「不要吞掉我的話」交給一個看不見的判斷。
 
 **標籤命名與主線摘要**都由「OpenAI 統整層」一節定義的工作負責；Jev 這邊只負責在既有標籤中選一個，或選 `__new__`。給 Jev 的 `[recent main-line context]` 在 M4 之後改用 `tree.mainDigest`，M1–M3 先用原文 300 字片段。
 
@@ -293,12 +297,12 @@ main_turns_since_last_sidebar: <整數>
 **預設收合，一個小徽章就好。** Mods 沒有「可自由拖曳的浮動按鈕」這種渲染點，最接近的是 `AbovePrompt`：prompt 框上方一條只有一行高的帶子。平常只畫一個徽章，pane 不開；點徽章（或熱鍵）才 `$.ui.open` 開出完整的樹，pane 右上角本來就有關閉記號。新答案進來不自動開 pane，只讓徽章計數加一並 toast 一下（`autoOpenPane` 預設 `false`）。
 
 ```
-┌ Sticky Notes 3 · 主線：auth 改 session cookie，剩 token 輪替 ·  [開啟 ⌥S] ┐  ← AbovePrompt 帶子，一行
+┌ Sticky Notes 3 · 主線：auth 改 session cookie，剩 token 輪替 ·  [開啟 s] ┐  ← AbovePrompt 帶子，一行
 │ > 你的 prompt…                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-點開後的 pane（`$.ui.open({ id: 'sticky', title: 'Sticky Notes', placement: 'dock' })`）：
+點開後的 pane（`$.ui.open({ id: 'sticky', title: 'Sticky Notes' })`）：
 
 ```
 ┌ Sticky Notes ────────────────────────────── [選取] [只看本 session] ┐
@@ -316,20 +320,21 @@ main_turns_since_last_sidebar: <整數>
 │ highWaterMark 怎麼選                                                 │  ← 選中的節點
 │ 2026-10-06 21:50 · claude-fork · 主線 T14 · 做事 session             │
 │ <Markdown 答案，捲動>                                                │
-│ [追問…______________________] [送出]  [回流到 ▾] [重新分類] [回到主線] │
+│ [追問…______________________] [送出]  [回流主線] [重新分類] [回到主線] │
 │────────────────────────────────────────────────────────────────────│
 │ openai 今日 412k / 2,000k · mode=redacted                            │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-- **點節點 = 導航。** 展開右側答案、設為 `activeThread`，並用 `$.prompt.suggest` 在主 prompt 框放一行灰字「正在追問：highWaterMark 怎麼選」。接著在主 prompt 框打字，Jev 判成追問就攔進這條鏈，答案出在 pane。「回到主線」清掉 `activeThread` 和灰字。
+- **點節點 = 導航。** 展開右側答案、設為本 session 的 `activeThread`，帶子上顯示「正在追問：highWaterMark 怎麼選」（`$.ui.status` 當備案；不用 `$.prompt.suggest`，它是「建議的下一句」，按 Tab 會進輸入框被誤送）。接著在主 prompt 框打字，Jev 判成追問就攔進這條鏈，答案出在 pane。「回到主線」清掉 `activeThread` 和帶子上的字。
 - **pane 裡的追問框**是第二條路，直接走旁答流程，不經 Jev。
-- **選取模式**：按「選取」後每個 root 列變成可勾選（大綱和追問鏈不可選），底部出現「整合 N 個 · 約 xk tokens」；按了才打 OpenAI，產生一個大綱分組。第一版只允許選 root。
+- **選取模式**：按「選取」後每個 root 列變成可勾選（大綱和追問鏈不可選），底部出現「整合 N 個 · 約 xk tokens」；按了才打統整層，產生一個大綱分組。第一版只允許選 root；不做 shift + 方向鍵（`Button` 收不到修飾鍵）。
 - **大綱列**：可折疊；「重算」在成員有新追問後亮 ⚠；「digest」寫一頁筆記到 `.claude/sticky-notes/digests/`。
-- **回流到 ▾**：下拉列出本 session 和同專案的其他 live session；送出的是 `title + summary`，用 `$.prompt.submit({ asUser: true })`（本 session）或 `$.session.send`（其他 session）。節點記 `promotedTo`，樹上標 ↑。
+- **回流主線**：送 `title + summary` 進目前這個 session，`$.prompt.submit({ asUser: true })`。節點記 `promotedIn`，樹上標 ↑。要帶進另一個 session，到那邊開 pane 點同一個節點回流即可。
 - **重新分類**：把這個節點的問題改送主線（分錯時用）。
-- **只看本 session**：用 `anchor.sessionId` 篩選；fork 出去的 session 預設看整棵樹。
-- **主線上的徽章**：`UserMessage` 渲染點在當初發問那一輪的 user message 右側畫「📌 n」，點了開 pane 並選中該節點。這是從主線找回旁支的路。
+- **只看本 session**：用 `anchor.sessionId` 篩選；其他 session 預設看整棵樹。
+- **主線上的徽章**：`UserMessage` 渲染點在旁問發生前的那一則主線 user 訊息右側畫「📌 n」（被攔下的旁問本身不會變成訊息，所以只能掛在前一則），點了開 pane 並選中該節點；同一個 handler 裡可用 `$.ui.scroll({ to: messageId })` 反向捲回主線。
+- **熱鍵**：`Button.hotkey` 只吃一個數字或小寫字母，帶子的「開啟」用 `s`；沒有 ⌥S。
 - 標籤以 `[tag]` 顯示；「整理標籤」手動合併。
 
 **`/sticky-note` 指令**
@@ -339,13 +344,18 @@ main_turns_since_last_sidebar: <整數>
 | `/sticky-note` | 開 / 關 pane |
 | `/sticky-note new <問題>` | 手動開一張新 note，不經 Jev 路由 |
 | `/sticky-note back` | 回到主線（清掉 `activeThread`） |
-| `/sticky-note promote [session 名]` | 回流 `activeThread` 到本 session 或指定 session |
+| `/sticky-note promote [session 名]` | 回流 `activeThread` 進目前這個 session |
 | `/sticky-note outline` | 進入選取模式 |
 | `/sticky-note refresh` | 手動更新主線進度摘要（會顯示預估 token） |
 | `/sticky-note digest [大綱或標籤]` | 把一個大綱或一個標籤壓成一頁筆記寫進 `.claude/sticky-notes/digests/` |
 | `/sticky-note export` | 把整棵樹寫成 `.claude/sticky-notes/tree-YYYY-MM-DD.md` |
 | `/sticky-note mode <off\|redacted\|full>` | 切換 `openaiContextMode`，只影響本 session |
 | `/sticky-note stats` | toast 顯示節點數、大綱數、今日 Jev / OpenAI 呼叫次數、OpenAI token 用量 |
+| `/sticky-note feedback good|bad [main|sidebar|followup|project]` | 標記本 session 上一句的路由對不對（路由回饋，見下） |
+| `/sticky-note calibrate` | 用標記過的樣本算各門檻的準確率與詢問率（`$.ui.log`，不進模型） |
+| `/sticky-note doctor` | 顯示兩把 key 找到與否、從哪個來源（不顯示值） |
+
+**路由回饋**（M1 先做接口，之後再調）：每次 Jev 判斷都記一筆樣本到 `$.store` 的 `route:<root>:<id>`（prompt 前 200 字、Jev 原始機率、當時門檻、決策、建出的節點；每專案最多 500 筆，只存本機）。標記來源：`/sticky-note feedback`、`$.ui.ask` 的選擇（自動當正解）、M2 pane 的「重新分類」。`/sticky-note calibrate` 依標記算出每個門檻會自動路由幾句、對幾句、要問幾句，M1 驗收的 50 句校正就用它。
 
 **透明度**：每次 `{ drop }` 都 `$.ui.log('→ sidebar: ' + title)`，讓我知道那句話去哪了，不會以為沒送出。pane 沒開時改用 `$.ui.toast`。
 
@@ -389,7 +399,8 @@ cc-sticky-notes/
 ├── tests/
 │   ├── route.test.ts
 │   ├── tree.test.ts
-│   └── redact.test.ts
+│   ├── redact.test.ts
+│   ├── jev.test.ts / notes.test.ts / feedback.test.ts / ui.test.ts
 ├── PROBE.md                    # M0 探針結果
 └── README.md
 ```
@@ -409,6 +420,7 @@ cc-sticky-notes/
     "claudeModel": { "type": "string", "default": "haiku", "description": "Model for $.model.complete when summaryProvider is claude" },
     "claudeEffort": { "type": "string", "default": "low", "description": "Effort for $.model.complete when summaryProvider is claude" },
     "openaiModel": { "type": "string", "default": "gpt-5-mini" },
+    "openaiReasoningEffort": { "type": "string", "default": "minimal", "options": ["minimal", "low", "medium", "high", "none"], "description": "gpt-5 系列是推理模型，不設 minimal 時短工作的 token 會被推理吃光、回覆是空的（M0 實測）；none = 不送這個參數" },
     "openaiContextMode": { "type": "string", "default": "redacted", "description": "off | redacted | full — what project content may be sent to OpenAI" },
     "openaiDailyTokenCap": { "type": "number", "default": 2000000, "description": "Pause OpenAI calls past this many tokens per UTC day" },
     "autoOpenPane": { "type": "boolean", "default": false, "description": "Open the pane automatically when a sidebar answer arrives" },
@@ -419,7 +431,7 @@ cc-sticky-notes/
 
 `userConfig` 的確切 schema 格式以 plugins 的 manifest reference 為準，上面是意圖。
 
-**金鑰**：從環境變數讀 `TYPESAFE_API_KEY` 與 `OPENAI_API_KEY`（`$.env.get`），不寫進任何設定檔或 `$.store`。OpenAI key 用一個專用 Project 建立，只對該 Project 開資料分享。缺 key 時 mod 仍要能載入：缺 Jev → 全部走 `$.ui.ask`；缺 OpenAI → 全部走 `$.model.fork`。
+**金鑰**：`TYPESAFE_API_KEY` 與 `OPENAI_API_KEY` 不要求設成 Windows 整機 / 使用者環境變數。依序取第一個找到的：(1) 行程環境變數（終端機、CI 用；`$.env.get`，名稱必須是字串常值）；(2) `~/.claude/sticky-notes/.env`，使用者層級、不跟任何 repo 走，正式使用放這裡；(3) mod 自己資料夾下的 `.env`，開發時用，已在 `.gitignore`。**不讀目前專案的 `.env`**：很多專案自己的 `.env` 就有那個 app 的 `OPENAI_API_KEY`，讀到會誤用。金鑰值不寫進 log、`$.store` 或任何設定檔；`/sticky-note doctor` 只顯示每把 key 找到與否、從哪裡來。OpenAI key 用一個專用 Project 建立，只對該 Project 開資料分享。缺 key 時 mod 仍要能載入：缺 Jev → 全部進主線，只留手動入口；缺 OpenAI 而 `summaryProvider = openai` → 退回 `claude`，toast 一次。
 
 **開發時載入**：`claude --plugin-dir ./cc-sticky`-notes，存檔自動 reload。載入後 Claude Code 會寫出 `.claude-plugin/types/claude-code/index.d.ts`，這份是該版本的權威型別，PROBE 階段先讀它。
 
@@ -429,14 +441,13 @@ cc-sticky-notes/
 
 | 需求 | 做法 |
 | --- | --- |
-| N 個 session 看到同一棵樹 | `$.store` 的 key 是專案根目錄，不是 session；fork 的、重開的都自然共用 |
-| 分辨哪張 note 是哪邊問的 | `anchor.sessionId`；pane 顯示 session 名，可篩「只看本 session」 |
-| 各 session 的「目前追問中」互不干擾 | `activeThread` 以 sessionId 為 key，各自一份；在 A 點了節點不會讓 B 的輸入被判成追問 |
+| N 個 session 看到同一棵樹 | `$.store` 的 key 以專案 key（`repo()?.root ?? root()`）開頭，不帶 session；fork 的、重開的、不同 worktree 的都自然共用 |
+| 兩個 session 同時寫不互蓋 | 節點、大綱、各 session 的 activeThread 各自一個 key（M0 實測：同 key 併發會掉寫入，不同 key 不會） |
+| 分辨哪張 note 是哪邊問的 | `anchor.sessionId`；pane 可篩「只看本 session」 |
+| 各 session 的「目前追問中」互不干擾 | `active:<root>:<sessionId>`，各自一份 |
 | 為了 context 長度重開新 session 時不從零開始 | `prompt.context` 注入標題索引（< 300 token）；若 `mainDigest` 存在，pane 頂端立刻顯示上一個 session 留下的主線摘要，使用者可以選擇把它回流進新 session 當開場 |
-| 規劃 session 的結論送進做事 session | 「回流到 ▾」選目標 session，`$.session.send({ to: { sessionId }, text: title + summary })`；對方 Claude 讀到後照常回應 |
+| 規劃 session 的結論帶進做事 session | 不做跨 session 傳送（列不出同專案的 session、拿不到 Desktop 的 session 名稱，做出來也難選）。改為：到做事 session 開 pane、點同一個節點、回流——樹是共用的，這就夠了 |
 | 哪個 session 都能整理 | 整合大綱、重算、refresh 不限 session；`mainDigest.sessionId` 記最後是誰更新的 |
-
-`$.session.send` 要對方 session 沒把 `crossSessionInbound` 設成 refuse，而且 Desktop 文件說透過這條路的訊息會在對方畫面顯示成帶來源標籤的卡片，所以回流到別的 session 時對方看得出是哪裡來的。
 
 ## 風險、未知與要先驗證的事
 
@@ -453,6 +464,8 @@ cc-sticky-notes/
 | `$.store` 是否真的跨 session、跨 `--plugin-dir` 與正式安裝共用 | 不共用就在 M3 改存 `~/.claude/sticky-notes/<hash>.json` |
 | 在 Desktop，`AbovePrompt` 帶子長什麼樣、佔多高？mod 開的 `Pane` 能不能像內建 pane 一樣拖曳排版、關閉、彈出成獨立視窗？`Button` 的 `hotkey` 在 Desktop 吃不吃 ⌥ 組合鍵？ | 帶子不能用就退回 `$.ui.status`（prompt 下方一行）+ `/sticky-note` 開關；pane 不能拖就接受 dock 位置，靠「預設收合」把干擾降到最低 |
 | UserMessage 渲染點能否在既有訊息右側加一顆小按鈕（徽章）而不蓋掉原文？$.prompt.suggest 的灰字在 Desktop 怎麼顯示、會不會被送出？$.session 能否列出同專案其他 live session 的 id 與名稱？pane 裡能否收到 shift + 方向鍵這類組合鍵（決定選取模式要不要做多選手勢）？$.ui.scroll 能否捲主 transcript？ | 徽章不行就只在 pane 顯示 anchor；suggest 不行就用 $.ui.status 顯示「正在追問：…」；列不出 session 就讓使用者貼 session id；沒有組合鍵就用「選取」按鈕切模式；不能捲主 transcript 就在節點下顯示主線那一句的前 120 字 |
+
+M0 的實測結果在 repo 的 `PROBE.md`，上表保留為提問紀錄；兩者衝突以 `PROBE.md` 為準。已確認的重點：`prompt.submit` 的 `{ drop }` 會在畫面留一行提示、session 檔的佇列紀錄留原文，但模型 context 乾淨；`$.store` 跨 session 共用但同 key 併發會掉寫入；`$.model.classify` 不回信心值；`$.session` 沒有 list；邏輯模組拿不到 `$`，要用 `register.ts` 同檔的 closure（Ports）傳進去。
 
 **外部依賴風險**
 

@@ -83,6 +83,19 @@ export const register: Register = on => {
         return { drop: 'cc-sticky-probe: complete done' }
       }
 
+      case 'model': {
+        // Does $.model.complete honour an alias and a full id? (claudeModel userConfig)
+        for (const model of (rest || 'sonnet claude-haiku-4-5-20251001 opus').split(/\s+/)) {
+          try {
+            const r = await $.model.complete({ model, prompt: 'Reply with only the name of the model you are.', maxTokens: 40, effort: 'low', timeoutMs: 30000 })
+            out(`model ${model} ms=${await ms()} result=${JSON.stringify(r).slice(0, 300)}`)
+          } catch (err) {
+            out(`model ${model} threw ${String(err).slice(0, 200)}`)
+          }
+        }
+        return { drop: 'cc-sticky-probe: model done' }
+      }
+
       case 'classify': {
         try {
           const label = await $.model.classify(rest || 'why does TCP need a three-way handshake?', [

@@ -9,6 +9,17 @@ export const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
 export type OpenAIContextMode = 'off' | 'redacted' | 'full'
 
+/**
+ * gpt-5 family models reason before answering; with the default effort a small
+ * max_completion_tokens is spent on reasoning alone and the reply is empty
+ * (PROBE.md, round two). 'minimal' answered summary jobs in ~150 tokens.
+ */
+export type OpenAIReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'none'
+
+export function asReasoningEffort(value: unknown): OpenAIReasoningEffort {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'none' ? value : 'minimal'
+}
+
 export function asContextMode(value: unknown): OpenAIContextMode {
   return value === 'off' || value === 'full' ? value : 'redacted'
 }
@@ -19,7 +30,10 @@ export type OpenAIDeps = {
   log(text: string): void
 }
 
-export function openaiProvider(d: OpenAIDeps, opts: { model: string; contextMode: OpenAIContextMode }): SummaryProvider {
+export function openaiProvider(
+  d: OpenAIDeps,
+  opts: { model: string; contextMode: OpenAIContextMode; reasoningEffort: OpenAIReasoningEffort },
+): SummaryProvider {
   return {
     name: 'openai',
     async summarize(job: SummaryJob, input: SummaryInput): Promise<SummaryResult> {
@@ -36,6 +50,8 @@ export function openaiProvider(d: OpenAIDeps, opts: { model: string; contextMode
           body: JSON.stringify({
             model: opts.model,
             max_completion_tokens: input.maxTokens,
+            // 'none' leaves the parameter out, for models that do not take it
+            ...(opts.reasoningEffort === 'none' ? {} : { reasoning_effort: opts.reasoningEffort }),
             messages: [
               { role: 'system', content: input.system },
               { role: 'user', content: input.prompt },

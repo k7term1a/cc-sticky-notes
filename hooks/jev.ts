@@ -62,7 +62,10 @@ export function buildRequest(input: JevInput): unknown {
       criteria: {
         main_task: 'Advances the project: an instruction, a code change, or a decision about what Claude just did',
         sidebar_knowledge: 'Asks about a principle, concept or background knowledge; does not ask Claude to change anything',
-        project_question: 'A question about this project itself (e.g. "why do we use X here") whose answer belongs in the main conversation',
+        project_question:
+          'A question about this project itself whose answer belongs in the main conversation: it refers to "we", "our", "here", ' +
+          '"this project" or to code and decisions in this conversation, e.g. "why do we use session cookies here instead of JWT?", ' +
+          '"為什麼我們這裡用 X？", "這個專案為什麼要這樣分層？"',
       },
     },
     is_followup: {

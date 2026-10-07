@@ -11,7 +11,10 @@ export type AnsweredBy = 'claude-fork' | 'claude' | 'openai' | 'manual'
 /** Bookmark: where in the main line the curiosity happened. */
 export type Anchor = {
   sessionId: string
+  /** Last main-line turn before the question (turn.start); idle prompts carry none. */
   turnId: string | null
+  /** uuid of the main-line user message before the question (session.append door='prompt'). UserMessage badge / $.ui.scroll (M2). */
+  messageId: string | null
   at: number
   /** Last main-line user prompt, first 120 chars. Debug only. */
   mainSnippet: string
@@ -34,7 +37,9 @@ export type TreeNode = {
   tags: string[]
   route: { label: string; confidence: number; source: RouteSource }
   promotedAt: number | null
-  promotedTo: string | null
+  /** The session it was promoted in (promotion only goes into the current session). */
+  promotedIn: string | null
+  /** Derived on load from the children's parentId (never trusted from the store), ordered by anchor.at. */
   children: string[]
 }
 
@@ -56,16 +61,59 @@ export type MainDigest = {
   sessionId: string
 }
 
-/** $.store key `tree:${projectRoot}`; shared by every session of the project. */
-export type Tree = {
+/** $.store `meta:<root>`. */
+export type TreeMeta = {
   version: 2
+  tags: string[]
+  mainDigest: MainDigest | null
+}
+
+/**
+ * The whole tree of one project, as assembled in memory from its keys:
+ * node:<root>:<id>, outline:<root>:<id>, active:<root>:<sessionId>, meta:<root>.
+ * Every session of the project (forks, restarts, other worktrees) shares it.
+ */
+export type Tree = {
   nodes: Record<string, TreeNode>
+  /** Derived: parentId === null, ordered by anchor.at. */
   roots: string[]
   outlines: Record<string, Outline>
   /** key = sessionId; each session keeps its own "currently following up". */
   activeThread: Record<string, string | null>
   tags: string[]
   mainDigest: MainDigest | null
+}
+
+/** Routing labels the user can say were right. */
+export type RouteChoice = 'main' | 'sidebar' | 'followup' | 'project_question'
+
+/** What the user said about one routing decision. */
+export type RouteFeedback = {
+  verdict: 'right' | 'wrong'
+  /** What it should have been; null when unknown. */
+  expected: RouteChoice | null
+  at: number
+  source: 'command' | 'ask' | 'reclassify' | 'pane'
+}
+
+/**
+ * One routing decision kept for calibrating the thresholds (PLAN.md: 50 real prompts).
+ * $.store `route:<root>:<id>`, local only, capped per project.
+ */
+export type RouteSample = {
+  id: string
+  at: number
+  sessionId: string
+  /** First 200 characters of the prompt. Stays in the local store. */
+  prompt: string
+  /** Jev's raw answer; null when Jev was unavailable. */
+  jev: { route: string; confidence: number; isFollowup: number; needsProjectCtx: number; tag: string | null } | null
+  thresholds: { route: number; followup: number; needsCtx: number }
+  /** What the decision table did. */
+  decision: 'main' | 'sidebar' | 'followup' | 'project_question' | 'ask'
+  /** The node it made, if any. */
+  nodeId: string | null
+  feedback: RouteFeedback | null
 }
 
 declare module 'claude-code' {
@@ -88,6 +136,10 @@ declare module 'claude-code' {
       lastTurnId: string | null
       /** $.session.turns() when the last sidebar note was made; feeds main_turns_since_last_sidebar. */
       turnsAtLastSidebar: number
+      /** uuid of the last main-line user message (session.append door='prompt'). */
+      lastPromptUuid: string | null
+      /** The last routing sample of this session, for /sticky-note feedback. */
+      lastSampleId: string | null
     }
   }
 }

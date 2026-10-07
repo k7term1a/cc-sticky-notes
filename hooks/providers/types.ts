@@ -33,6 +33,28 @@ export interface SummaryProvider {
   summarize(job: SummaryJob, input: SummaryInput): Promise<SummaryResult>
 }
 
+/**
+ * Tries `primary`; when it is unavailable (no key) uses `fallback` and calls
+ * onFallback once (PLAN.md: 缺 OpenAI 而 summaryProvider = openai → 退回 claude，toast 一次).
+ * Other failures (over the cap, refused by mode, errors) are returned as they are:
+ * PLAN.md never switches to the Claude plan by itself for those.
+ */
+export function withFallback(primary: SummaryProvider, fallback: SummaryProvider, onFallback: () => void): SummaryProvider {
+  let warned = false
+  return {
+    name: primary.name,
+    async summarize(job, input) {
+      const r = await primary.summarize(job, input)
+      if (r.ok || r.reason !== 'unavailable') return r
+      if (!warned) {
+        warned = true
+        onFallback()
+      }
+      return fallback.summarize(job, input)
+    },
+  }
+}
+
 /** PLAN.md: rough estimate shown on buttons, characters ÷ 2. */
 export function estimateTokens(text: string): number {
   return Math.ceil([...text].length / 2)

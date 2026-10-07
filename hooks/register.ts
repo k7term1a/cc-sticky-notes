@@ -3,10 +3,11 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
-import { COMMAND, COMMAND_SPEC, runCommand } from './commands'
-import { change, dropReason, readOptions, refresh, routePrompt, startNote } from './notes'
+import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand } from './commands'
+import { bookmarkNote, change, dropReason, readOptions, recordRoute, refresh, routePrompt, startNote } from './notes'
 import { bandView, PANE_ID, PANE_TITLE, paneView } from './pane'
 import type { Ports } from './ports'
+import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
 
 // $.state values (types/index.d.ts). The loader reads atoms only from this file's own consts.
@@ -16,11 +17,21 @@ const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
 const turnsAtSidebarAtom = atom({ plugin: 'cc-sticky-notes', key: 'turnsAtLastSidebar' } as const, 0)
+const lastPromptAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastPromptUuid' } as const, null)
+const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } as const, null)
+
+/** Key files to try after the environment (secrets.ts says which and why). */
+async function keyFilesOf($: EngineInterface): Promise<string[]> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  return keyFiles(home, $.plugin.root)
+}
 
 function portsOf($: EngineInterface): Ports {
+  const readText = (path: string) => $.fs.read(path) as Promise<string>
   return {
     sessionId: () => $.session.id(),
-    projectRoot: () => $.session.root(),
+    // PLAN.md: one tree per repo, shared by its worktrees; the session root outside a repo.
+    projectRoot: async () => (await $.session.repo())?.root ?? (await $.session.root()),
     turns: () => $.session.turns(),
     messages: async () => {
       const list = await $.session.messages()
@@ -28,11 +39,27 @@ function portsOf($: EngineInterface): Ports {
     },
     now: () => $.clock.now(),
     later: fn => void $.clock.after(0, fn),
-    store: { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) },
+    store: {
+      get: key => $.store.get(key),
+      set: (key, value) => $.store.set(key, value),
+      delete: key => $.store.delete(key),
+      keys: () => $.store.keys(),
+    },
     fetch: (url, init) => $.http.fetch(url, init),
     fork: prompt => $.model.fork({ prompt }),
     complete: request => $.model.complete(request),
-    keys: { typesafe: () => $.env.get('TYPESAFE_API_KEY'), openai: () => $.env.get('OPENAI_API_KEY') },
+    keys: {
+      typesafe: async () => resolveKey('TYPESAFE_API_KEY', await $.env.get('TYPESAFE_API_KEY'), await keyFilesOf($), readText),
+      openai: async () => resolveKey('OPENAI_API_KEY', await $.env.get('OPENAI_API_KEY'), await keyFilesOf($), readText),
+      report: async () => {
+        const files = await keyFilesOf($)
+        return [
+          describeKey('TYPESAFE_API_KEY', await findKey('TYPESAFE_API_KEY', await $.env.get('TYPESAFE_API_KEY'), files, readText)),
+          describeKey('OPENAI_API_KEY', await findKey('OPENAI_API_KEY', await $.env.get('OPENAI_API_KEY'), files, readText)),
+          `key 檔查找順序：${files.join(' → ')}`,
+        ]
+      },
+    },
     ui: {
       log: (text, to) => $.ui.log(text, { to: to ?? 'transcript' }),
       toast: text => $.ui.toast(text),
@@ -43,7 +70,6 @@ function portsOf($: EngineInterface): Ports {
       },
       closePane: () => $.ui.close({ id: PANE_ID }),
       isPaneOpen: async () => (await $.ui.panes()).some(pane => pane.id === PANE_ID),
-      suggest: async text => void (await $.prompt.suggest({ text })),
     },
     state: {
       publishTree: async tree => void (await update($, treeAtom, () => tree)),
@@ -52,19 +78,19 @@ function portsOf($: EngineInterface): Ports {
       setTurnsAtLastSidebar: async n => void (await update($, turnsAtSidebarAtom, () => n)),
       addPending: async delta => void (await update($, pendingAtom, n => Math.max(0, n + delta))),
       addUnread: async delta => void (await update($, unreadAtom, n => Math.max(0, n + delta))),
+      lastPromptUuid: () => read($, lastPromptAtom),
+      lastSampleId: () => read($, lastSampleAtom),
+      setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
     },
   }
 }
 
-/** Pane click: show it, make it this session's activeThread, hint in the prompt box. */
+/** Pane click: show it and make it this session's activeThread; the band shows 正在追問. */
 async function selectNode($: EngineInterface, id: string | null) {
   const p = portsOf($)
   const sessionId = await p.sessionId()
   await update($, selectedAtom, () => id)
-  const tree = await change(p, t => setActive(t, sessionId, id))
-  const title = id === null ? null : (tree.nodes[id]?.title ?? null)
-  // How the suggestion looks in Desktop is unverified (PROBE.md).
-  if (title !== null) await p.ui.suggest(`正在追問：${title}`)
+  await change(p, t => setActive(t, sessionId, id))
 }
 
 export const register: Register = (on, options) => {
@@ -81,29 +107,56 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('session.append', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    // anchor.messageId: the main-line user message a later sidebar question sits after (M2 badge).
+    if (e.door === 'prompt' && e.message.type === 'user' && !e.message.isMeta) {
+      await update($, lastPromptAtom, () => e.uuid)
+      return next(e)
+    }
+    // PROBE.md P10: `/sticky-note new <問題>` would leave the question in the main context.
+    if (e.door === 'command') {
+      let masked = false
+      const content = e.message.content.map(block => {
+        if (block.type !== 'text' || typeof block.text !== 'string') return block
+        const text = maskNewArgs(block.text)
+        if (text === null) return block
+        masked = true
+        return { ...block, text }
+      })
+      if (masked) return next({ ...e, message: { ...e.message, content } })
+    }
+    return next(e)
+  })
+
   on('prompt.submit', async ($, e, next) => {
     // Only the person's own typed prompts are routed; notifications, peers and plugins pass.
     if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)
     if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
 
     const p = portsOf($)
-    const d = await routePrompt(p, opts, e.text)
+    const routed = await routePrompt(p, opts, e.text)
+    const keep = (nodeId: string | null) => p.later(() => void recordRoute(p, opts, e.text, routed, nodeId))
+    const d = routed.decision
     switch (d.kind) {
       case 'main':
       case 'ask':
+        keep(null)
         return next(e)
       case 'project_question':
-        // TODO(M1): the promotedAt bookmark node (待討論 in PROBE.md).
+        keep(await bookmarkNote(p, e.text, d.route))
         return next({ ...e, context: [...(e.context ?? []), d.context] })
       case 'sidebar':
-        await startNote(p, opts, {
-          question: e.text,
-          attach: { kind: d.attach },
-          answerer: d.answerer,
-          route: d.route,
-          tag: d.tag.kind === 'existing' ? d.tag.tag : undefined,
-        })
-        // The drop reason is shown to the user as a notice (PROBE.md): it is the transparency line.
+        keep(
+          await startNote(p, opts, {
+            question: e.text,
+            attach: { kind: d.attach },
+            answerer: d.answerer,
+            route: d.route,
+            tag: d.tag.kind === 'existing' ? d.tag.tag : undefined,
+          }),
+        )
+        // The drop reason is the transparency line (PROBE.md P2): no separate $.ui.log.
         return { drop: dropReason(e.text) }
     }
   })
@@ -112,7 +165,12 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const data = { tree: await read($, treeAtom), unread: await read($, unreadAtom), pending: await read($, pendingAtom) }
+    const data = {
+      tree: await read($, treeAtom),
+      unread: await read($, unreadAtom),
+      pending: await read($, pendingAtom),
+      sessionId: await $.session.id(),
+    }
     return bandView($.ui.resolve(e), data, () => void portsOf($).ui.openPane())
   })
 

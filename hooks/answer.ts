@@ -2,13 +2,15 @@
 import type { ModelForkResult } from 'claude-code'
 
 import type { AnsweredBy } from '../types'
+import { LANGUAGE_RULE } from './digest'
 import type { SummaryProvider } from './providers/types'
 
 export type QA = { question: string; answer: string }
 
 const FORK_FRAME =
   '[sticky-notes] The user asked this as an aside. Answer the aside directly and concisely; ' +
-  'do not continue, plan or change the main task, and do not call tools.'
+  'do not continue, plan or change the main task, and do not call tools. ' +
+  LANGUAGE_RULE
 
 /**
  * ModelForkRequest is `{ prompt }` only (no system, no extra messages), so the
@@ -26,7 +28,8 @@ export function buildForkPrompt(history: readonly QA[], question: string): strin
 
 export const KNOWLEDGE_SYSTEM =
   'You answer short background-knowledge questions for a developer. Be accurate and concise; ' +
-  'use Markdown. You do not see their project, so do not guess about it.'
+  'use Markdown. You do not see their project, so do not guess about it. ' +
+  LANGUAGE_RULE
 
 export function buildKnowledgePrompt(history: readonly QA[], question: string): string {
   const lines = history.flatMap((qa, i) => [`Q${i + 1}: ${qa.question}`, `A${i + 1}: ${qa.answer}`])

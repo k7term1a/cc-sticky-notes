@@ -4,8 +4,8 @@ import { NEW_TAG } from './jev'
 
 export const PROJECT_QUESTION_CONTEXT = '[sticky-notes] project question; answer briefly'
 
-/** Probability at which needs_project_ctx counts as "yes". Not in PLAN.md; see PROBE.md 待討論. */
-export const NEEDS_CTX_AT = 0.5
+/** needs_project_ctx at or above this goes to $.model.fork (PLAN.md: 0.3, conservative — less leaves Anthropic). */
+export const NEEDS_CTX_AT = 0.3
 /** Tag confidence below this asks the summary layer for a new name (PLAN.md: < 0.5). */
 export const TAG_MIN = 0.5
 
@@ -28,7 +28,7 @@ export type Decision =
       route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }
     }
   | { kind: 'project_question'; context: string; route: { label: string; confidence: number; source: 'jev' } }
-  | { kind: 'ask'; why: 'no-verdict' | 'low-confidence' }
+  | { kind: 'ask'; why: 'low-confidence' }
 
 export function decideTag(verdict: JevVerdict, tagsKnown: number): TagDecision {
   if (tagsKnown === 0 || !verdict.tag) return tagsKnown === 0 ? { kind: 'name-new' } : { kind: 'none' }
@@ -37,7 +37,8 @@ export function decideTag(verdict: JevVerdict, tagsKnown: number): TagDecision {
 }
 
 /**
- * @param verdict Jev's answer, or null when Jev is unavailable (no key, error) → ask.
+ * @param verdict Jev's answer, or null when Jev is unavailable (no key, error): everything
+ *   goes to the main line and only the manual entries make notes (PLAN.md「沒有 Jev key 時」).
  * @param hasActiveThread whether this session has an activeThread to follow up on.
  */
 export function decide(
@@ -45,7 +46,7 @@ export function decide(
   t: Thresholds,
   ctx: { hasActiveThread: boolean; tagsKnown: number },
 ): Decision {
-  if (verdict === null) return { kind: 'ask', why: 'no-verdict' }
+  if (verdict === null) return { kind: 'main' }
   const { label, confidence } = verdict.route
   if (confidence < t.route) return { kind: 'ask', why: 'low-confidence' }
 

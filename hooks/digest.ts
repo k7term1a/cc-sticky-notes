@@ -3,9 +3,14 @@
 import type { SummaryProvider } from './providers/types'
 import { fallbackTitle, TITLE_MAX } from './tree'
 
+/** Same language as the question; Chinese is always Traditional Chinese (Taiwan usage). */
+export const LANGUAGE_RULE =
+  'Write in the same language as the question. If the question is in Chinese, write in Traditional Chinese ' +
+  'as used in Taiwan (繁體中文), never Simplified Chinese.'
+
 const TITLE_SYSTEM =
-  `Write a title of at most ${TITLE_MAX} characters and a summary of exactly three sentences for this Q/A, ` +
-  'in the language of the question. Reply with JSON only: {"title": "...", "summary": "..."}'
+  `Write a title of at most ${TITLE_MAX} characters and a summary of exactly three sentences for this Q/A. ` +
+  `${LANGUAGE_RULE} Reply with JSON only: {"title": "...", "summary": "..."}`
 
 export function titlePrompt(question: string, answer: string): string {
   return `Question:\n${question}\n\nAnswer:\n${answer.slice(0, 6000)}`

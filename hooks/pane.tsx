@@ -3,26 +3,41 @@
 // and the press handlers; nothing here touches `$`.
 import type { ElementTable, RenderElement } from 'claude-code'
 
-import type { Tree } from '../types'
+import type { Tree, TreeNode } from '../types'
 import { countNodes, visibleRoots } from './tree'
 
 export const PANE_ID = 'sticky'
 export const PANE_TITLE = 'Sticky Notes'
+/** Button.hotkey takes one digit or lowercase letter only (PROBE.md P7). */
+export const OPEN_HOTKEY = 's'
 
-export type BandData = { tree: Tree | null; unread: number; pending: number }
+export type BandData = { tree: Tree | null; unread: number; pending: number; sessionId: string }
 
-/** AbovePrompt: one line, a count and an open button. */
+/** 正在追問：<title> lives in the band (PLAN.md: not $.prompt.suggest). */
+export function activeTitle(tree: Tree | null, sessionId: string): string | null {
+  const id = tree?.activeThread[sessionId] ?? null
+  return id === null ? null : (tree?.nodes[id]?.title ?? null)
+}
+
+/** P9: an answer that did not come from the fork had no project context. */
+export function contextMark(n: TreeNode): string {
+  return n.answeredBy === 'claude-fork' || n.answer === '' ? '' : ' · 無專案脈絡'
+}
+
+/** AbovePrompt: one line, a count, what is being followed up, and an open button. */
 export function bandView(els: ElementTable, d: BandData, onOpen: () => void): RenderElement {
   const { Box, Text, Button } = els
   const n = d.tree ? countNodes(d.tree) : 0
+  const following = activeTitle(d.tree, d.sessionId)
   return (
     <Box>
       <Text dimColor>
         📌 Sticky Notes {n}
         {d.unread > 0 ? ` · ${d.unread} 新` : ''}
-        {d.pending > 0 ? ` · ${d.pending} 回答中` : ''}{' '}
+        {d.pending > 0 ? ` · ${d.pending} 回答中` : ''}
+        {following !== null ? ` · 正在追問：${following}` : ''}{' '}
       </Text>
-      <Button key="open" plain label="開啟" onPress={onOpen} />
+      <Button key="open" plain hotkey={OPEN_HOTKEY} label="開啟" onPress={onOpen} />
     </Box>
   )
 }
@@ -31,7 +46,7 @@ export type PaneData = { tree: Tree | null; selectedId: string | null; sessionId
 
 export type PaneActions = { select(id: string | null): void }
 
-/** Pane: root list (● = this session's activeThread), the selected answer, 回到主線. */
+/** Pane: root list (● = this session's activeThread, ↑ = promoted), the selected answer, 回到主線. */
 export function paneView(els: ElementTable, d: PaneData, act: PaneActions): RenderElement {
   const { Box, Text, Button, Markdown } = els
   const active = d.tree?.activeThread[d.sessionId] ?? null
@@ -45,14 +60,17 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
         <Button
           key={`node:${r.id}`}
           plain
-          label={`${r.id === active ? '●' : '○'} ${r.title}${r.children.length ? ` (+${r.children.length})` : ''}`}
+          label={`${r.id === active ? '●' : '○'} ${r.title}${r.promotedAt !== null ? ' ↑' : ''}${r.children.length ? ` (+${r.children.length})` : ''}`}
           onPress={() => act.select(r.id)}
         />
       ))}
       {selected && (
         <Box flexDirection="column">
-          <Text bold>{selected.title}</Text>
-          <Markdown text={selected.answer === '' ? '_回答中…_' : selected.answer} />
+          <Text bold>
+            {selected.title}
+            {contextMark(selected)}
+          </Text>
+          <Markdown text={selected.answer !== '' ? selected.answer : selected.promotedAt !== null ? '_在主線回答_' : '_回答中…_'} />
         </Box>
       )}
       <Button key="back" label="回到主線" onPress={() => act.select(null)} />

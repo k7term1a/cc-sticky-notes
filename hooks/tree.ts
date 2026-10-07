@@ -1,38 +1,49 @@
-// Tree data model: pure operations on a Tree value, plus the $.store adapter.
-// Pure functions never mutate their input; each returns a new Tree.
-import type { Anchor, AnsweredBy, MainDigest, Outline, RouteSource, Tree, TreeNode } from '../types'
+// Tree data model: pure operations on an in-memory Tree, plus the $.store layout.
+//
+// Layout (PLAN.md「資料模型」): one key per node, outline and session, so two
+// sessions writing at once never overwrite each other (PROBE.md P3):
+//   node:<root>:<id>  outline:<root>:<id>  active:<root>:<sessionId>  meta:<root>
+// `roots` and every node's `children` are derived from parentId on load, never
+// stored, so adding a child never rewrites its parent's key.
+import type { Anchor, AnsweredBy, MainDigest, Outline, RouteSource, Tree, TreeMeta, TreeNode } from '../types'
 import type { KV } from './ports'
 
 export const TITLE_MAX = 12
 
 export function emptyTree(): Tree {
-  return { version: 2, nodes: {}, roots: [], outlines: {}, activeThread: {}, tags: [], mainDigest: null }
+  return { nodes: {}, roots: [], outlines: {}, activeThread: {}, tags: [], mainDigest: null }
 }
 
-/** $.store key; one tree per project, shared by all of its sessions. */
-export function treeKey(projectRoot: string): string {
-  return `tree:${projectRoot.replace(/[\\/]+$/, '')}`
+/** The project key: repo root (shared across worktrees) or session root, without trailing separators. */
+export function normalizeRoot(root: string): string {
+  return root.replace(/[\\/]+$/, '')
 }
 
-/** Accepts whatever the store held (undefined, an older shape) and returns a usable Tree. */
-export function normalizeTree(raw: unknown): Tree {
-  if (raw === null || typeof raw !== 'object') return emptyTree()
-  const t = raw as Partial<Tree>
-  if (t.version !== 2) return emptyTree()
-  return {
-    version: 2,
-    nodes: t.nodes ?? {},
-    roots: t.roots ?? [],
-    outlines: t.outlines ?? {},
-    activeThread: t.activeThread ?? {},
-    tags: t.tags ?? [],
-    mainDigest: t.mainDigest ?? null,
-  }
+export const keys = {
+  node: (root: string, id: string) => `node:${root}:${id}`,
+  outline: (root: string, id: string) => `outline:${root}:${id}`,
+  active: (root: string, sessionId: string) => `active:${root}:${sessionId}`,
+  meta: (root: string) => `meta:${root}`,
 }
 
 /** First TITLE_MAX characters (code points, so CJK and emoji are not split). */
 export function fallbackTitle(question: string): string {
   return [...question.replace(/\s+/g, ' ').trim()].slice(0, TITLE_MAX).join('')
+}
+
+/** Recomputes roots and children from parentId; a node whose parent is gone counts as a root. */
+export function derive(tree: Tree): Tree {
+  const byAt = (a: TreeNode, b: TreeNode) => a.anchor.at - b.anchor.at || a.id.localeCompare(b.id)
+  const all = Object.values(tree.nodes).sort(byAt)
+  const children: Record<string, string[]> = {}
+  const roots: string[] = []
+  for (const n of all) {
+    if (n.parentId !== null && tree.nodes[n.parentId]) (children[n.parentId] ??= []).push(n.id)
+    else roots.push(n.id)
+  }
+  const nodes: Tree['nodes'] = {}
+  for (const n of all) nodes[n.id] = { ...n, children: children[n.id] ?? [] }
+  return { ...tree, nodes, roots }
 }
 
 export type NewNode = {
@@ -46,7 +57,7 @@ export type NewNode = {
   tags?: string[]
   /** Already promoted at creation (project_question bookmark). */
   promotedAt?: number | null
-  promotedTo?: string | null
+  promotedIn?: string | null
 }
 
 export type Attach =
@@ -58,10 +69,17 @@ export type Attach =
   | { kind: 'under'; parentId: string }
 
 /**
- * Adds a node and makes it this session's activeThread.
+ * Adds a node. By default it becomes this session's activeThread; a
+ * project_question bookmark passes `makeActive: false`.
  * A follow-up whose parent is gone becomes a root rather than failing.
  */
-export function addNode(tree: Tree, sessionId: string, input: NewNode, attach: Attach): { tree: Tree; node: TreeNode } {
+export function addNode(
+  tree: Tree,
+  sessionId: string,
+  input: NewNode,
+  attach: Attach,
+  opts: { makeActive?: boolean } = {},
+): { tree: Tree; node: TreeNode } {
   if (tree.nodes[input.id]) throw new Error(`node ${input.id} already exists`)
   const wanted =
     attach.kind === 'under' ? attach.parentId : attach.kind === 'followup' ? (tree.activeThread[sessionId] ?? null) : null
@@ -80,23 +98,14 @@ export function addNode(tree: Tree, sessionId: string, input: NewNode, attach: A
     tags: input.tags ?? [],
     route: input.route,
     promotedAt: input.promotedAt ?? null,
-    promotedTo: input.promotedTo ?? null,
+    promotedIn: input.promotedIn ?? null,
     children: [],
   }
 
-  const nodes = { ...tree.nodes, [node.id]: node }
-  let roots = tree.roots
-  let outlines = tree.outlines
-  if (parentId === null) {
-    roots = [...roots, node.id]
-  } else {
-    const parent = tree.nodes[parentId]!
-    nodes[parentId] = { ...parent, children: [...parent.children, node.id] }
-    outlines = markStale(tree, rootOf(tree, parentId), input.anchor.at)
-  }
-
-  const next: Tree = { ...tree, nodes, roots, outlines, activeThread: { ...tree.activeThread, [sessionId]: node.id } }
-  return { tree: next, node }
+  const outlines = parentId === null ? tree.outlines : markStale(tree, rootOf(tree, parentId), input.anchor.at)
+  const activeThread = opts.makeActive === false ? tree.activeThread : { ...tree.activeThread, [sessionId]: node.id }
+  const next = derive({ ...tree, nodes: { ...tree.nodes, [node.id]: node }, outlines, activeThread })
+  return { tree: next, node: next.nodes[node.id]! }
 }
 
 /** A new follow-up under an outline member makes that outline stale. */
@@ -156,10 +165,11 @@ export function updateNode(tree: Tree, id: string, patch: NodePatch): Tree {
   return { ...tree, nodes: { ...tree.nodes, [id]: { ...node, ...patch, title } } }
 }
 
-export function markPromoted(tree: Tree, id: string, to: string, at: number): Tree {
+/** 回流主線: promotion only ever goes into the session it was pressed in. */
+export function markPromoted(tree: Tree, id: string, sessionId: string, at: number): Tree {
   const node = tree.nodes[id]
   if (!node) return tree
-  return { ...tree, nodes: { ...tree.nodes, [id]: { ...node, promotedAt: at, promotedTo: to } } }
+  return { ...tree, nodes: { ...tree.nodes, [id]: { ...node, promotedAt: at, promotedIn: sessionId } } }
 }
 
 /** Removes a node and its whole subtree (重新分類 sends the question to the main line instead). */
@@ -175,10 +185,6 @@ export function removeNode(tree: Tree, id: string): Tree {
 
   const nodes: Tree['nodes'] = {}
   for (const [k, v] of Object.entries(tree.nodes)) if (!gone.has(k)) nodes[k] = v
-  if (node.parentId !== null && nodes[node.parentId]) {
-    const parent = nodes[node.parentId]!
-    nodes[node.parentId] = { ...parent, children: parent.children.filter(c => c !== id) }
-  }
 
   const outlines: Tree['outlines'] = {}
   for (const [k, o] of Object.entries(tree.outlines)) {
@@ -189,7 +195,7 @@ export function removeNode(tree: Tree, id: string): Tree {
   const activeThread: Tree['activeThread'] = {}
   for (const [s, a] of Object.entries(tree.activeThread)) activeThread[s] = a !== null && gone.has(a) ? node.parentId : a
 
-  return { ...tree, nodes, roots: tree.roots.filter(r => !gone.has(r)), outlines, activeThread }
+  return derive({ ...tree, nodes, outlines, activeThread })
 }
 
 export type NewOutline = { id: string; title: string; outline: string; memberIds: string[]; createdAt: number }
@@ -264,20 +270,80 @@ export function countNodes(tree: Tree): number {
   return Object.keys(tree.nodes).length
 }
 
-// ---- $.store adapter -------------------------------------------------------
+// ---- $.store layout ---------------------------------------------------------
 
-export async function loadTree(store: KV, key: string): Promise<Tree> {
-  return normalizeTree(await store.get(key))
+const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object'
+
+function readMeta(raw: unknown): TreeMeta {
+  if (!isObj(raw) || raw.version !== 2) return { version: 2, tags: [], mainDigest: null }
+  return {
+    version: 2,
+    tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : [],
+    mainDigest: (raw.mainDigest as MainDigest | null | undefined) ?? null,
+  }
+}
+
+/** Assembles one project's tree from its keys. */
+export async function loadTree(store: KV, root: string): Promise<Tree> {
+  const r = normalizeRoot(root)
+  const all = await store.keys()
+  const tree = emptyTree()
+  const meta = readMeta(await store.get(keys.meta(r)))
+  tree.tags = meta.tags
+  tree.mainDigest = meta.mainDigest
+  for (const key of all) {
+    if (key.startsWith(keys.node(r, ''))) {
+      const n = await store.get(key)
+      if (isObj(n) && typeof n.id === 'string') tree.nodes[n.id] = { ...(n as TreeNode), children: [] }
+    } else if (key.startsWith(keys.outline(r, ''))) {
+      const o = await store.get(key)
+      if (isObj(o) && typeof o.id === 'string') tree.outlines[o.id] = o as Outline
+    } else if (key.startsWith(keys.active(r, ''))) {
+      const a = await store.get(key)
+      tree.activeThread[key.slice(keys.active(r, '').length)] = typeof a === 'string' ? a : null
+    }
+  }
+  return derive(tree)
+}
+
+/** A node as stored: children are derived, so they are not kept. */
+const stored = (n: TreeNode) => JSON.stringify({ ...n, children: [] })
+
+/** Writes only the keys whose value changed between `before` and `after`; deletes the ones that went away. */
+export async function saveDiff(store: KV, root: string, before: Tree, after: Tree): Promise<number> {
+  const r = normalizeRoot(root)
+  let writes = 0
+  for (const [id, n] of Object.entries(after.nodes)) {
+    const old = before.nodes[id]
+    if (!old || stored(old) !== stored(n)) {
+      await store.set(keys.node(r, id), { ...n, children: [] })
+      writes++
+    }
+  }
+  for (const id of Object.keys(before.nodes)) if (!after.nodes[id]) await store.delete(keys.node(r, id)), writes++
+  for (const [id, o] of Object.entries(after.outlines)) {
+    if (JSON.stringify(before.outlines[id]) !== JSON.stringify(o)) await store.set(keys.outline(r, id), o), writes++
+  }
+  for (const id of Object.keys(before.outlines)) if (!after.outlines[id]) await store.delete(keys.outline(r, id)), writes++
+  for (const [sid, a] of Object.entries(after.activeThread)) {
+    if (before.activeThread[sid] !== a) await store.set(keys.active(r, sid), a), writes++
+  }
+  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags) || JSON.stringify(before.mainDigest) !== JSON.stringify(after.mainDigest)) {
+    const meta: TreeMeta = { version: 2, tags: after.tags, mainDigest: after.mainDigest }
+    await store.set(keys.meta(r), meta)
+    writes++
+  }
+  return writes
 }
 
 /**
- * Read-modify-write with the read taken right before the write, so another
- * session's write in between is lost only inside that short window.
- * See PROBE.md: $.store has no compare-and-set; same-key writes from two
- * sessions are last-writer-wins.
+ * Load, apply, write back only what changed. Two sessions changing different
+ * nodes never collide; only a simultaneous edit of the same node or outline
+ * is last-writer-wins.
  */
-export async function mutateTree(store: KV, key: string, fn: (tree: Tree) => Tree): Promise<Tree> {
-  const next = fn(await loadTree(store, key))
-  await store.set(key, next)
-  return next
+export async function mutateTree(store: KV, root: string, fn: (tree: Tree) => Tree): Promise<Tree> {
+  const before = await loadTree(store, root)
+  const after = derive(fn(before))
+  await saveDiff(store, root, before, after)
+  return after
 }

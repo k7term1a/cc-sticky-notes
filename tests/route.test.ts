@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { JevVerdict } from '../hooks/jev'
-import { ASK_OPTIONS, decide, decideFromAsk, decideTag, PROJECT_QUESTION_CONTEXT } from '../hooks/route'
+import { ASK_OPTIONS, decide, decideFromAsk, decideTag, NEEDS_CTX_AT, PROJECT_QUESTION_CONTEXT } from '../hooks/route'
 
 const T = { route: 0.6, followup: 0.6 }
 
@@ -34,8 +34,8 @@ describe('decision table (PLAN.md 決策表)', () => {
     }
   })
 
-  test('no verdict (Jev missing or failed) → ask', () => {
-    expect(decide(null, T, ctx)).toEqual({ kind: 'ask', why: 'no-verdict' })
+  test('no verdict (Jev missing or failed) → main line, never a dialog (PLAN.md 沒有 Jev key 時)', () => {
+    expect(decide(null, T, ctx)).toEqual({ kind: 'main' })
   })
 
   test('the threshold comes from config', () => {
@@ -58,9 +58,10 @@ describe('sidebar details', () => {
     expect(d).toMatchObject({ attach: 'root' })
   })
 
-  test('needs_project_ctx picks the fork; otherwise the summary provider', () => {
-    expect(decide(v('sidebar_knowledge', 0.9, { needsProjectCtx: 0.5 }), T, ctx)).toMatchObject({ answerer: 'fork' })
-    expect(decide(v('sidebar_knowledge', 0.9, { needsProjectCtx: 0.49 }), T, ctx)).toMatchObject({ answerer: 'summary-provider' })
+  test('needs_project_ctx ≥ 0.3 picks the fork; below, the summary provider', () => {
+    expect(NEEDS_CTX_AT).toBe(0.3)
+    expect(decide(v('sidebar_knowledge', 0.9, { needsProjectCtx: 0.3 }), T, ctx)).toMatchObject({ answerer: 'fork' })
+    expect(decide(v('sidebar_knowledge', 0.9, { needsProjectCtx: 0.29 }), T, ctx)).toMatchObject({ answerer: 'summary-provider' })
   })
 
   test('route provenance is recorded for threshold calibration', () => {
