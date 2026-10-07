@@ -43,6 +43,8 @@ export type Ports = {
     openPane(): Promise<void>
     closePane(): Promise<void>
     isPaneOpen(): Promise<boolean>
+    /** The plugin's one status line under the prompt; undefined clears it. */
+    status(text: string | undefined): void
   }
   state: {
     publishTree(tree: Tree): Promise<void>
@@ -56,5 +58,7 @@ export type Ports = {
     setLastSampleId(id: string | null): Promise<void>
     /** The node the pane shows. */
     setSelected(id: string | null): Promise<void>
+    /** Flips /sticky-note ui-demo; resolves the new value. */
+    toggleUiDemo(): Promise<boolean>
   }
 }

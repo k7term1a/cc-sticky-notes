@@ -4,6 +4,7 @@
 import type { CommandRunResult } from 'claude-code'
 
 import { calibrate, formatCalibration, listSamples, parseFeedback } from './feedback'
+import { DEMO_LEGEND, label } from './uidemo'
 import { change, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
@@ -12,7 +13,7 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | promote | outline | refresh | digest | export | mode | stats',
+  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | ui-demo | promote | outline | refresh | digest | export | mode | stats',
   argumentHint: '[new <問題> | back | feedback good|bad [main|sidebar|followup|project] | calibrate]',
 }
 
@@ -74,6 +75,17 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       const ok = await giveFeedback(p, { ...fb, source: 'command' })
       p.ui.toast(ok ? `已記下：上一句分類${fb.verdict === 'right' ? '正確' : '錯誤'}${fb.expected ? `，應為 ${fb.expected}` : ''}` : '這個 session 還沒有可以回饋的分類')
       return {}
+    }
+    case 'ui-demo': {
+      const on = await p.state.toggleUiDemo()
+      if (!on) {
+        p.ui.status(undefined)
+        return { text: 'UI 位置展示：關' }
+      }
+      p.ui.status(`${label('D')} 📌 Sticky Notes（狀態列）`)
+      p.ui.toast(`${label('J')} toast 在這裡`)
+      for (const line of DEMO_LEGEND) p.ui.log(`${label('K')} ${line}`)
+      return { text: 'UI 位置展示：開。每個能放 UI 的地方都標了〔字母〕，對照表見下方卡片與灰字。' }
     }
     case 'doctor': {
       for (const line of await p.keys.report()) p.ui.log(line)

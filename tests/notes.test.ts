@@ -86,6 +86,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       openPane: async () => {},
       closePane: async () => {},
       isPaneOpen: async () => false,
+      status: () => {},
     },
     state: {
       publishTree: async () => {},
@@ -98,6 +99,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       lastSampleId: async () => state.lastSample,
       setLastSampleId: async id => void (state.lastSample = id),
       setSelected: async () => {},
+      toggleUiDemo: async () => false,
     },
   }
   return {

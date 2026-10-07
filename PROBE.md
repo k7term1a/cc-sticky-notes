@@ -21,6 +21,29 @@
 
 ---
 
+## 〇之四、UI 能放在哪裡（10/07 下午）
+
+- **自動重載**：已在 `~/.claude/settings.json` 的 `env` 加 `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"`（你同意的；原檔備份在 `settings.json.bak-sticky`）。這個值在 session 啟動時讀，所以**已經開著的 session 要再重開一次**；之後開的 session，mod 存檔就自動重載，不用一直開新 session。
+- **能畫的位置**（型別檔，2.1.289；「Desktop」欄是型別檔寫的 Raised on）：
+
+| 代號 | 位置 | Desktop | 能放什麼 |
+| --- | --- | --- | --- |
+| A | `AbovePrompt`：輸入框上方的帶子（現在用的） | ✅ | 一整列，可放按鈕 |
+| B | `SessionMode`：輸入框下方最右邊的模式標籤 | ✅ | 幾個字，加在既有標籤後面 |
+| C | `PromptHint`：輸入框下方的灰色提示行 | ✅ | 一行字；Desktop 不畫 `tail`，只能整行改寫（會蓋掉原本的提示） |
+| D | `$.ui.status`：輸入框下方的狀態列 | ✅ | 一行字，不能點 |
+| E | `Spinner`：Claude 工作中那一列 | ✅ | 改寫字或畫自己的樹；只在 turn 進行中出現 |
+| F | `UserMessage`：每則你的訊息旁 | ✅ | 小徽章 / 按鈕（M2 的「📌 n」） |
+| G | `AssistantMessage`：每則回覆最下面 | ✅ | 一行或一個小區塊 |
+| H | `CommandOutput`：`/sticky-note` 的輸出列 | ✅ | 對話裡的一整張卡片 |
+| I | `Pane`：右側 pane | ✅ | 完整介面；位置由 Desktop 決定，API 不能指定左 / 下 |
+| J | `$.ui.toast`：右上角 | ✅ | 幾秒的一行字 |
+| K | `$.ui.log`：對話裡的灰字 | ✅ | 一行字，模型讀不到 |
+| — | `TurnDuration`、`InfoNotice` | ✗ | 只有終端機 |
+
+- **`/sticky-note ui-demo`**：開關。打開後 A–K 每個位置都畫上〔字母〕標籤（F、G 要有對話、E 要等 Claude 在工作才看得到），再打一次關掉。測試確認每個加了標籤的樹在 terminal 與 desktop 都能畫；Desktop 上實際長怎樣要你看。選好位置之後再把正式 UI 搬過去，`uidemo.tsx` 屆時可以刪掉。
+- `register.ts` 改名為 `register.tsx`（裡面開始有 JSX）。
+
 ## 〇之三、第一次在 Desktop 實際使用（10/07 下午）
 
 你在 Desktop 這個 session 試用的結果（截圖）：
@@ -338,7 +361,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **81 pass / 0 fail**（7 個檔；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
+- `claude plugin test .`：✅ **82 pass / 0 fail**（7 個檔；ui.test 新增 ui-demo 各位置的驗證；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動

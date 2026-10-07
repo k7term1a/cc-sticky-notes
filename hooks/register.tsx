@@ -6,6 +6,7 @@ import { atom, read, update } from 'claude-code'
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand } from './commands'
 import { bookmarkNote, change, dropReason, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
 import { bandView, PANE_ID, PANE_TITLE, paneView } from './pane'
+import { commandCard, label, replyFooter, userBadge } from './uidemo'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
@@ -19,6 +20,7 @@ const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as co
 const turnsAtSidebarAtom = atom({ plugin: 'cc-sticky-notes', key: 'turnsAtLastSidebar' } as const, 0)
 const lastPromptAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastPromptUuid' } as const, null)
 const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } as const, null)
+const uiDemoAtom = atom({ plugin: 'cc-sticky-notes', key: 'uiDemo' } as const, false)
 
 /** Key files to try after the environment (secrets.ts says which and why). */
 async function keyFilesOf($: EngineInterface): Promise<string[]> {
@@ -70,6 +72,7 @@ function portsOf($: EngineInterface): Ports {
       },
       closePane: () => $.ui.close({ id: PANE_ID }),
       isPaneOpen: async () => (await $.ui.panes()).some(pane => pane.id === PANE_ID),
+      status: text => $.ui.status(text),
     },
     state: {
       publishTree: async tree => void (await update($, treeAtom, () => tree)),
@@ -82,6 +85,10 @@ function portsOf($: EngineInterface): Ports {
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
+      toggleUiDemo: async () => {
+        await update($, uiDemoAtom, on => !on)
+        return read($, uiDemoAtom)
+      },
     },
   }
 }
@@ -174,6 +181,29 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
 
+  // ---- /sticky-note ui-demo: label every place the mod can draw (uidemo.tsx) ----
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) =>
+    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, modes: [...e.props.modes, `${label('B')}📌 2`] } }) : next(e),
+  )
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) =>
+    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, hint: `${label('C')}📌 Sticky Notes · ${e.props.hint}` } }) : next(e),
+  )
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) =>
+    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, word: `${label('E')}${e.props.word}` } }) : next(e),
+  )
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (e.props.isExpanded || !(await read($, uiDemoAtom))) return next(e)
+    return userBadge($.ui.resolve(e), await next(e))
+  })
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (!e.props.isFirstOfReply || !(await read($, uiDemoAtom))) return next(e)
+    return replyFooter($.ui.resolve(e), await next(e))
+  })
+  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
+    if (e.props.command !== COMMAND || e.props.args.trim() !== 'ui-demo' || !(await read($, uiDemoAtom))) return next(e)
+    return commandCard($.ui.resolve(e))
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const data = {
@@ -182,7 +212,16 @@ export const register: Register = (on, options) => {
       pending: await read($, pendingAtom),
       sessionId: await $.session.id(),
     }
-    return bandView($.ui.resolve(e), data, () => void portsOf($).ui.openPane())
+    const els = $.ui.resolve(e)
+    const band = bandView(els, data, () => void portsOf($).ui.openPane())
+    if (!(await read($, uiDemoAtom))) return band
+    const { Box, Text } = els
+    return (
+      <Box>
+        <Text>{label('A')}</Text>
+        {band}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
@@ -192,10 +231,19 @@ export const register: Register = (on, options) => {
       sessionId: await $.session.id(),
       pending: await read($, pendingAtom),
     }
-    return paneView($.ui.resolve(e), data, {
+    const els = $.ui.resolve(e)
+    const pane = paneView(els, data, {
       select: id => void selectNode($, id),
       back: () => void selectNode($, null),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
     })
+    if (!(await read($, uiDemoAtom))) return pane
+    const { Box, Text } = els
+    return (
+      <Box flexDirection="column">
+        <Text>{label('I')} 右側 pane</Text>
+        {pane}
+      </Box>
+    )
   })
 }

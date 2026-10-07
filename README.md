@@ -28,7 +28,7 @@ Keys: `TYPESAFE_API_KEY` (Jev routing) and `OPENAI_API_KEY` (optional summary pr
 
 ## Layout
 
-- `hooks/register.ts`: every hook, and `portsOf($)`. Only this file touches `$` (PROBE.md P1).
+- `hooks/register.tsx`: every hook, and `portsOf($)`. Only this file touches `$` (PROBE.md P1).
 - `hooks/tree.ts`, `route.ts`, `jev.ts`, `redact.ts`, `digest.ts`, `answer.ts`: logic modules. Pure, or they take `Ports`.
 - `hooks/notes.ts`: the flow (route → note → background answer → routing sample).
 - `hooks/feedback.ts`: routing samples, `/sticky-note feedback`, `calibrate`.
