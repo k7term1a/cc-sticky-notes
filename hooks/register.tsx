@@ -3,10 +3,9 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
-import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand } from './commands'
+import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
 import { bookmarkNote, change, dropReason, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
-import { bandView, PANE_ID, PANE_TITLE, paneView } from './pane'
-import { commandCard, label, replyFooter, userBadge } from './uidemo'
+import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
@@ -20,12 +19,20 @@ const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as co
 const turnsAtSidebarAtom = atom({ plugin: 'cc-sticky-notes', key: 'turnsAtLastSidebar' } as const, 0)
 const lastPromptAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastPromptUuid' } as const, null)
 const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } as const, null)
-const uiDemoAtom = atom({ plugin: 'cc-sticky-notes', key: 'uiDemo' } as const, false)
 
 /** Key files to try after the environment (secrets.ts says which and why). */
 async function keyFilesOf($: EngineInterface): Promise<string[]> {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
   return keyFiles(home, $.plugin.root)
+}
+
+/**
+ * The status line under the prompt (the developer's pick, PROBE.md「UI 能放在哪裡」 D):
+ * "cc-sticky-note <the question this session follows up>". Redrawn whenever the tree
+ * or the pending count changes.
+ */
+async function refreshStatus($: EngineInterface) {
+  $.ui.status(statusLine(await read($, treeAtom), await $.session.id(), await read($, pendingAtom)))
 }
 
 function portsOf($: EngineInterface): Ports {
@@ -75,25 +82,27 @@ function portsOf($: EngineInterface): Ports {
       status: text => $.ui.status(text),
     },
     state: {
-      publishTree: async tree => void (await update($, treeAtom, () => tree)),
+      publishTree: async tree => {
+        await update($, treeAtom, () => tree)
+        await refreshStatus($)
+      },
       lastTurnId: () => read($, lastTurnAtom),
       turnsAtLastSidebar: () => read($, turnsAtSidebarAtom),
       setTurnsAtLastSidebar: async n => void (await update($, turnsAtSidebarAtom, () => n)),
-      addPending: async delta => void (await update($, pendingAtom, n => Math.max(0, n + delta))),
+      addPending: async delta => {
+        await update($, pendingAtom, n => Math.max(0, n + delta))
+        await refreshStatus($)
+      },
       addUnread: async delta => void (await update($, unreadAtom, n => Math.max(0, n + delta))),
       lastPromptUuid: () => read($, lastPromptAtom),
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
-      toggleUiDemo: async () => {
-        await update($, uiDemoAtom, on => !on)
-        return read($, uiDemoAtom)
-      },
     },
   }
 }
 
-/** Pane click: show it and make it this session's activeThread; the band shows 正在追問. 回到主線 passes null. */
+/** Pane click: show it and make it this session's activeThread. 回到主線 passes null. */
 async function selectNode($: EngineInterface, id: string | null) {
   const p = portsOf($)
   const sessionId = await p.sessionId()
@@ -116,6 +125,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register(COMMAND_SPEC)
+    await $.command.register(SHORT_COMMAND_SPEC)
     await prepare(portsOf($))
     return next(e)
   })
@@ -180,67 +190,8 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
-
-  // ---- /sticky-note ui-demo: label every place the mod can draw (uidemo.tsx) ----
-  // B / C: the first try rewrote props (modes / hint) and the desktop drew nothing new;
-  // this round draws the plugin's own tree there instead (B2 / C2).
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    if (!(await read($, uiDemoAtom))) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    return (
-      <Box gap={1}>
-        <Text dimColor>{e.props.modes.join(' & ')}</Text>
-        <Text>{label('B2')}📌 2</Text>
-      </Box>
-    )
-  })
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (!(await read($, uiDemoAtom))) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    return (
-      <Box gap={1}>
-        <Text>{label('C2')}📌 Sticky Notes</Text>
-        <Text dimColor>{e.props.hint}</Text>
-      </Box>
-    )
-  })
-  on('ui.render', { component: 'Spinner' }, async ($, e, next) =>
-    (await read($, uiDemoAtom)) ? next({ ...e, props: { ...e.props, word: `${label('E')}${e.props.word}` } }) : next(e),
-  )
-  // No isExpanded check here: the desktop has no ctrl+o, so its rows always read
-  // as expanded, and skipping those drew nothing there (F missing on the desktop).
-  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    if (!(await read($, uiDemoAtom))) return next(e)
-    return userBadge($.ui.resolve(e), await next(e))
-  })
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (!e.props.isFirstOfReply || !(await read($, uiDemoAtom))) return next(e)
-    return replyFooter($.ui.resolve(e), await next(e))
-  })
-  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
-    if (e.props.command !== COMMAND || e.props.args.trim() !== 'ui-demo' || !(await read($, uiDemoAtom))) return next(e)
-    return commandCard($.ui.resolve(e))
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    const data = {
-      tree: await read($, treeAtom),
-      unread: await read($, unreadAtom),
-      pending: await read($, pendingAtom),
-      sessionId: await $.session.id(),
-    }
-    const els = $.ui.resolve(e)
-    const band = bandView(els, data, () => void portsOf($).ui.openPane())
-    if (!(await read($, uiDemoAtom))) return band
-    const { Box, Text } = els
-    return (
-      <Box>
-        <Text>{label('A')}</Text>
-        {band}
-      </Box>
-    )
-  })
+  // /sn: the keyboard shortcut for the pane (the status line cannot be clicked; PROBE.md)
+  on('command.run', { command: SHORT_COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const data = {
@@ -249,19 +200,10 @@ export const register: Register = (on, options) => {
       sessionId: await $.session.id(),
       pending: await read($, pendingAtom),
     }
-    const els = $.ui.resolve(e)
-    const pane = paneView(els, data, {
+    return paneView($.ui.resolve(e), data, {
       select: id => void selectNode($, id),
       back: () => void selectNode($, null),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
     })
-    if (!(await read($, uiDemoAtom))) return pane
-    const { Box, Text } = els
-    return (
-      <Box flexDirection="column">
-        <Text>{label('I')} 右側 pane</Text>
-        {pane}
-      </Box>
-    )
   })
 }

@@ -33,5 +33,5 @@ Keys: `TYPESAFE_API_KEY` (Jev routing) and `OPENAI_API_KEY` (optional summary pr
 - `hooks/notes.ts`: the flow (route → note → background answer → routing sample).
 - `hooks/feedback.ts`: routing samples, `/sticky-note feedback`, `calibrate`.
 - `hooks/secrets.ts`: where the keys come from.
-- `hooks/pane.tsx`: UI skeleton views.
+- `hooks/pane.tsx`: the pane and the status line under the prompt (`cc-sticky-note <question>`). `/sn` (or `/sticky-note`) opens and closes the pane.
 - `probes/m0/`: the M0 probe mod (`cc-sticky-probe`), kept separate.

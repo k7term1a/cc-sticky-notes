@@ -24,25 +24,16 @@ const node = (id: string, parentId: string | null, at: number, title: string, an
   children: [],
 })
 
-const BAND = {
-  component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 80, scroll: { top: 0, bodyRows: 6, contentRows: 1 }, view: {} } as never,
-} as const
-
 const PANE = {
   component: 'Pane',
   requestId: 'sticky',
   props: { title: 'Sticky Notes', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { top: 0, bodyRows: 40, contentRows: 1 }, view: {} } as never,
 } as const
 
-test('empty: band and pane skeletons validate on terminal and desktop', async ($, on) => {
+test('empty: the pane validates on terminal and desktop', async ($, on) => {
   mock.store(on)
   on('session.id', () => ({ value: 'S1' }))
   for (const surface of ['terminal', 'desktop'] as const) {
-    const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
-    expect(await band.find({ type: 'Text', text: /Sticky Notes/ })).toBeDefined()
-    expect(await band.find({ key: 'open' })).toBeDefined()
-    await band.unmount()
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
     expect(await pane.find({ type: 'Text', text: /還沒有/ })).toBeDefined()
     await pane.unmount()
@@ -105,42 +96,24 @@ test('a tree: follow-ups are listed under their parent and a click shows the thr
   expect(forked).toContain('[question]\n那 children 什麼時候算？')
 })
 
-test('ui-demo labels every site, and each labeled tree validates on terminal and desktop', async ($, on) => {
+test('/sn opens and closes the pane like /sticky-note', async ($, on) => {
   mock.store(on)
   on('session.id', () => ({ value: 'S1' }))
-  // the engine's own rows, beneath the plugin
-  on('ui.render', { component: 'UserMessage' }, ($, e) => h($.ui.resolve(e).Text, {}, 'ENGINE UserMessage') as never)
-  on('ui.render', { component: 'AssistantMessage' }, ($, e) => h($.ui.resolve(e).Text, {}, 'ENGINE AssistantMessage') as never)
-  on('ui.render', { component: 'CommandOutput' }, ($, e) => h($.ui.resolve(e).Text, {}, 'ENGINE CommandOutput') as never)
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  const run = (args: string) => $.command.run({ command: 'sticky-note', args } as never)
-  await run('ui-demo')
-  for (const surface of ['terminal', 'desktop'] as const) {
-    // the desktop reads every row as expanded (no ctrl+o): the badge must show there too
-    const user = await $.ui.mount({ plugin: PLUGIN, surface, component: 'UserMessage', props: { text: 'hi', origin: { kind: 'composer' }, isExpanded: true } as never })
-    expect(await user.find({ type: 'Text', text: /〔F〕/ })).toBeDefined()
-    await user.unmount()
-    const mode = await $.ui.mount({ plugin: PLUGIN, surface, component: 'SessionMode', props: { modes: ['focus'] } as never })
-    expect(await mode.find({ type: 'Text', text: /〔B2〕/ })).toBeDefined()
-    await mode.unmount()
-    const hint = await $.ui.mount({ plugin: PLUGIN, surface, component: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } as never })
-    expect(await hint.find({ type: 'Text', text: /〔C2〕/ })).toBeDefined()
-    await hint.unmount()
-    const reply = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AssistantMessage', props: { text: 'ok', isFirstOfReply: true } as never })
-    expect(await reply.find({ type: 'Text', text: /〔G〕/ })).toBeDefined()
-    await reply.unmount()
-    const out = await $.ui.mount({ plugin: PLUGIN, surface, component: 'CommandOutput', props: { command: 'sticky-note', args: 'ui-demo', text: 'x' } as never })
-    expect(await out.find({ type: 'Text', text: /〔H〕/ })).toBeDefined()
-    await out.unmount()
-    const band = await $.ui.mount({ plugin: PLUGIN, surface, ...BAND })
-    expect(await band.find({ type: 'Text', text: /〔A〕/ })).toBeDefined()
-    await band.unmount()
-    const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    expect(await pane.find({ type: 'Text', text: /〔I〕/ })).toBeDefined()
-    await pane.unmount()
-  }
-  await run('ui-demo') // off again
-  const user = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'UserMessage', props: { text: 'hi', origin: { kind: 'composer' }, isExpanded: false } as never })
-  expect(await user.find({ type: 'Text', text: /〔F〕/ })).toBeUndefined()
-  await user.unmount()
+  const open: string[] = []
+  let isOpen = false
+  on('ui.open', ($, e) => {
+    open.push(e.id)
+    isOpen = true
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', () => {
+    isOpen = false
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({ value: isOpen ? [{ id: 'sticky', title: 'Sticky Notes', isShown: true, isFocused: false, isPlaced: true }] : [] }) as never)
+  await $.command.run({ command: 'sn', args: '' } as never)
+  expect(open).toEqual(['sticky'])
+  expect(isOpen).toBe(true)
+  await $.command.run({ command: 'sn', args: '' } as never)
+  expect(isOpen).toBe(false)
 })

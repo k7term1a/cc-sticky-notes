@@ -58,7 +58,5 @@ export type Ports = {
     setLastSampleId(id: string | null): Promise<void>
     /** The node the pane shows. */
     setSelected(id: string | null): Promise<void>
-    /** Flips /sticky-note ui-demo; resolves the new value. */
-    toggleUiDemo(): Promise<boolean>
   }
 }

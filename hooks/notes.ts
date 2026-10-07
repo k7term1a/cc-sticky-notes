@@ -120,6 +120,11 @@ export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: 
   }
 }
 
+/** "這句要進主線還是旁支？(32%)": Jev's confidence in its own top route, shown when it was too low to act on. */
+export function askQuestion(verdict: jev.JevVerdict): string {
+  return `這句要進主線還是旁支？(${Math.round(verdict.route.confidence * 100)}%)`
+}
+
 export type Routed = {
   decision: Decision
   verdict: jev.JevVerdict | null
@@ -146,7 +151,7 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string): Prom
   })
   if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: null }
   try {
-    const asked = await p.ui.ask('這句要進主線還是旁支？', ASK_OPTIONS, 'Sticky Notes')
+    const asked = await p.ui.ask(askQuestion(r.verdict), ASK_OPTIONS, 'Sticky Notes')
     return { decision: decideFromAsk(asked, { hasActiveThread }), verdict: r.verdict, asked }
   } catch {
     // dismissed, or headless (-p): never swallow the user's input
@@ -285,8 +290,8 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     await change(p, t => updateNode(t, id, { title: ts.title, summary: ts.summary }))
     await p.state.addUnread(1)
     // M1 (PLAN.md): the answer is shown with $.ui.log — a dim transcript line the model never reads.
-    p.ui.log(`📌 ${ts.title}${a.answeredBy === 'claude-fork' ? '' : '（無專案脈絡）'}\n${clip(a.text, 2000)}`)
-    p.ui.toast(`📌 ${ts.title}`)
+    p.ui.log(`cc-sticky-note ${ts.title}${a.answeredBy === 'claude-fork' ? '' : '（無專案脈絡）'}\n${clip(a.text, 2000)}`)
+    p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
   } finally {
     await p.state.addPending(-1)

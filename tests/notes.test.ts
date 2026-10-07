@@ -3,7 +3,8 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { RouteSample, Tree } from '../types'
 import { listSamples } from '../hooks/feedback'
-import { bookmarkNote, giveFeedback, readOptions, recordRoute, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { askQuestion, bookmarkNote, giveFeedback, readOptions, recordRoute, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { statusLine } from '../hooks/pane'
 import type { KV, Ports } from '../hooks/ports'
 import { ASK_OPTIONS } from '../hooks/route'
 import { loadTree } from '../hooks/tree'
@@ -99,7 +100,6 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       lastSampleId: async () => state.lastSample,
       setLastSampleId: async id => void (state.lastSample = id),
       setSelected: async () => {},
-      toggleUiDemo: async () => false,
     },
   }
   return {
@@ -159,6 +159,10 @@ describe('routePrompt', () => {
     expect(r.asked).toBe(ASK_OPTIONS[1])
   })
 
+  test('the ask shows the confidence Jev had: 這句要進主線還是旁支？(32%)', () => {
+    expect(askQuestion({ route: { label: 'main_task', confidence: 0.318 }, isFollowup: 0, needsProjectCtx: 0 })).toBe('這句要進主線還是旁支？(32%)')
+  })
+
   test('a dismissed ask keeps the prompt in the main line', async () => {
     const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.4) })
     expect((await routePrompt(f.ports, opts, 'x')).decision).toEqual({ kind: 'main' })
@@ -215,8 +219,9 @@ describe('notes end to end (stubbed fork and complete)', () => {
     expect((await f.tree()).nodes[id]?.anchor).toMatchObject({ sessionId: 'S1', turnId: 't0', messageId: 'msg-uuid-1', mainSnippet: 'refactor auth to session cookies' })
     await f.runLater()
     expect((await f.tree()).nodes[id]).toMatchObject({ answer: 'answer #1', answeredBy: 'claude-fork', title: '標題', summary: '一。二。三。' })
-    expect(f.toasts).toContain('📌 標題')
-    expect(f.logs.some(l => l.startsWith('📌 標題\nanswer #1'))).toBe(true)
+    expect(f.toasts).toContain('cc-sticky-note 標題')
+    expect(f.logs.some(l => l.startsWith('cc-sticky-note 標題\nanswer #1'))).toBe(true)
+    expect([...f.toasts, ...f.logs].join('')).not.toMatch(/\p{Extended_Pictographic}/u)
   })
 
   test('three follow-ups hang off the same thread and carry its history to the fork', async () => {
@@ -290,5 +295,19 @@ describe('summary provider', () => {
     }
     await summaryProvider(f.ports, readOptions({ claudeModel: 'sonnet', claudeEffort: 'medium' })).summarize('tag-name', { system: 's', prompt: 'p', maxTokens: 10, hasProjectContent: false })
     expect(seen).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  })
+})
+
+describe('status line (under the prompt, no emoji)', () => {
+  test('cc-sticky-note, then the question this session follows up, then 回答中', async () => {
+    const f = fake()
+    expect(statusLine(await f.tree(), 'S1', 0)).toBe('cc-sticky-note')
+    const id = await startNote(f.ports, opts, { question: 'TCP 的 backpressure 是什麼原理？', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' } })
+    const t = await f.tree()
+    const title = t.nodes[id]!.title
+    expect(statusLine(t, 'S1', 0)).toBe(`cc-sticky-note ${title}`)
+    expect(statusLine(t, 'S1', 1)).toBe(`cc-sticky-note ${title}（回答中）`)
+    expect(statusLine(t, 'S2', 0)).toBe('cc-sticky-note')
+    expect(statusLine(t, 'S1', 1)).not.toMatch(/\p{Extended_Pictographic}/u)
   })
 })

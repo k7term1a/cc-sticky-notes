@@ -140,8 +140,6 @@ declare module 'claude-code' {
       lastPromptUuid: string | null
       /** The last routing sample of this session, for /sticky-note feedback. */
       lastSampleId: string | null
-      /** /sticky-note ui-demo: label every place the mod can draw, to choose where the UI goes. */
-      uiDemo: boolean
     }
   }
 }

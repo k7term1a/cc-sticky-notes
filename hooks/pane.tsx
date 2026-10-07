@@ -2,7 +2,7 @@
 // Pure views: register.ts reads the state and hands in the surface's element table
 // and the handlers; nothing here touches `$`.
 //
-//  📌 Sticky Notes                         3 則 · 1 回答中
+//  Sticky Notes                            3 則 · 1 回答中
 //  ╭ 便利貼 ───────────────────────────────────────────╮
 //  │ ● 樹載入需多次讀取原因                              │
 //  │   └ ● 為何需全讀節點                                │   ← ● = this session follows it up
@@ -24,15 +24,21 @@ import { countNodes, flatten, pathTo, visibleRoots } from './tree'
 
 export const PANE_ID = 'sticky'
 export const PANE_TITLE = 'Sticky Notes'
-/** Button.hotkey takes one digit or lowercase letter only (PROBE.md P7). */
-export const OPEN_HOTKEY = 's'
-
-export type BandData = { tree: Tree | null; unread: number; pending: number; sessionId: string }
 
 /** 正在追問：<title> lives in the band (PLAN.md: not $.prompt.suggest). */
 export function activeTitle(tree: Tree | null, sessionId: string): string | null {
   const id = tree?.activeThread[sessionId] ?? null
   return id === null ? null : (tree?.nodes[id]?.title ?? null)
+}
+
+/**
+ * The status line under the prompt (the developer's pick of the sites, no emoji):
+ * "cc-sticky-note <the question this session follows up>", plain "cc-sticky-note"
+ * when it follows none, "（回答中）" while answers are pending.
+ */
+export function statusLine(tree: Tree | null, sessionId: string, pending: number): string {
+  const following = activeTitle(tree, sessionId)
+  return (following === null ? 'cc-sticky-note' : `cc-sticky-note ${following}`) + (pending > 0 ? '（回答中）' : '')
 }
 
 /** P9: an answer that did not come from the fork had no project context. */
@@ -62,24 +68,6 @@ const clip = (s: string, n: number) => {
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
 }
 
-/** AbovePrompt: one line, a count, what is being followed up, and an open button. */
-export function bandView(els: ElementTable, d: BandData, onOpen: () => void): RenderElement {
-  const { Box, Text, Button } = els
-  const n = d.tree ? countNodes(d.tree) : 0
-  const following = activeTitle(d.tree, d.sessionId)
-  return (
-    <Box>
-      <Text dimColor>
-        📌 Sticky Notes {n}
-        {d.unread > 0 ? ` · ${d.unread} 新` : ''}
-        {d.pending > 0 ? ` · ${d.pending} 回答中` : ''}
-        {following !== null ? ` · 正在追問：${following}` : ''}{' '}
-      </Text>
-      <Button key="open" plain hotkey={OPEN_HOTKEY} label="開啟" onPress={onOpen} />
-    </Box>
-  )
-}
-
 export type PaneData = { tree: Tree | null; selectedId: string | null; sessionId: string; pending: number }
 
 export type PaneActions = {
@@ -104,7 +92,7 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
   return (
     <Box flexDirection="column" gap={1}>
       <Box justifyContent="space-between">
-        <Text bold>📌 Sticky Notes</Text>
+        <Text bold>Sticky Notes</Text>
         <Text dimColor>
           {rows.length} 則{d.pending > 0 ? ` · ${d.pending} 回答中` : ''}
         </Text>

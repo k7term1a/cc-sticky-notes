@@ -21,6 +21,17 @@
 
 ---
 
+## 〇之五、UI 位置定案（10/07 下午）
+
+- **Desktop 實測**（ui-demo 第一輪）：A 帶子、D 狀態列（輸入框下方右側、模型選單旁）、E 工作中列、G 回覆底下都有畫出來。B、C 第一輪改寫 props 的做法沒有出現；第二輪改成自己畫的 B2 / C2，你看得到 B2。F 第一輪因為 Desktop 每則訊息都被當成「已展開」而被跳過。
+- **你的決定**：指示放 D（或 B2），不要 emoji，只顯示「cc-sticky-note 現在問題」；要能用鍵盤開 pane；詢問對話框要顯示 Jev 的信心。
+- **做法**：
+  - 狀態列（D，`$.ui.status`）：`cc-sticky-note`，本 session 正在追問時是 `cc-sticky-note <題目>`，有回答還在跑時再加「（回答中）」。樹或回答中的數量一變就重畫（`pane.tsx` `statusLine`）。輸入框上方的帶子（A）拿掉了。
+  - **快捷鍵**：⚠ 做不到真正的組合鍵。D、B2 都不能點；mod 按鈕的 `hotkey` 只在它的區塊有焦點時才有用；`keybindings.json` 只能綁引擎內建的動作，沒有「執行某個 slash 指令」。所以改成兩個字的指令 **`/sn`**（和 `/sticky-note` 一樣，可帶子指令；`/sn` 單打就是開 / 關 pane）。
+  - 拿掉所有 emoji：toast 與灰字改成「cc-sticky-note <標題>」，pane 標題改成「Sticky Notes」。
+  - 詢問對話框：「這句要進主線還是旁支？(32%)」，百分比是 Jev 對它自己最高分那個路由的信心（低於門檻才會問）。
+  - ui-demo 與 `uidemo.tsx` 已刪除。
+
 ## 〇之四、UI 能放在哪裡（10/07 下午）
 
 - **自動重載**：已在 `~/.claude/settings.json` 的 `env` 加 `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"`（你同意的；原檔備份在 `settings.json.bak-sticky`）。這個值在 session 啟動時讀，所以**已經開著的 session 要再重開一次**；之後開的 session，mod 存檔就自動重載，不用一直開新 session。
@@ -361,7 +372,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **82 pass / 0 fail**（7 個檔；ui.test 新增 ui-demo 各位置的驗證；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
+- `claude plugin test .`：✅ **84 pass / 0 fail**（7 個檔；新增狀態列、`/sn`、詢問信心的測試；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動

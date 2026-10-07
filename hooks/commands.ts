@@ -4,7 +4,6 @@
 import type { CommandRunResult } from 'claude-code'
 
 import { calibrate, formatCalibration, listSamples, parseFeedback } from './feedback'
-import { DEMO_LEGEND, label } from './uidemo'
 import { change, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
@@ -13,8 +12,22 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | ui-demo | promote | outline | refresh | digest | export | mode | stats',
+  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | promote | outline | refresh | digest | export | mode | stats',
   argumentHint: '[new <問題> | back | feedback good|bad [main|sidebar|followup|project] | calibrate]',
+}
+
+/**
+ * /sn: the keyboard way to the pane. The status line cannot be clicked, a plugin
+ * button's hotkey works only while its site has the focus, and keybindings.json
+ * has no "run a command" action (PROBE.md), so a two-letter command is the shortcut.
+ * Takes the same subcommands as /sticky-note.
+ */
+export const SHORT_COMMAND = 'sn'
+
+export const SHORT_COMMAND_SPEC = {
+  name: SHORT_COMMAND,
+  description: 'Sticky Notes: open/close the pane (short for /sticky-note)',
+  argumentHint: '[new <問題> | back | …]',
 }
 
 const LATER: Record<string, string> = {
@@ -40,7 +53,7 @@ export const NEW_ARGS_MASK = 'new (sticky note)'
  * does not stay in the main context. Returns null when the text is not that record.
  */
 export function maskNewArgs(text: string): string | null {
-  if (!text.includes(`<command-name>/${COMMAND}</command-name>`)) return null
+  if (!text.includes(`<command-name>/${COMMAND}</command-name>`) && !text.includes(`<command-name>/${SHORT_COMMAND}</command-name>`)) return null
   const re = /<command-args>\s*new\b[\s\S]*?<\/command-args>/
   return re.test(text) ? text.replace(re, `<command-args>${NEW_ARGS_MASK}</command-args>`) : null
 }
@@ -75,18 +88,6 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       const ok = await giveFeedback(p, { ...fb, source: 'command' })
       p.ui.toast(ok ? `已記下：上一句分類${fb.verdict === 'right' ? '正確' : '錯誤'}${fb.expected ? `，應為 ${fb.expected}` : ''}` : '這個 session 還沒有可以回饋的分類')
       return {}
-    }
-    case 'ui-demo': {
-      const on = await p.state.toggleUiDemo()
-      if (!on) {
-        p.ui.status(undefined)
-        return { text: 'UI 位置展示：關' }
-      }
-      p.ui.status(`${label('D')} 📌 Sticky Notes（狀態列）`)
-      await p.ui.openPane() // I: the pane is part of the map
-      p.ui.toast(`${label('J')} toast 在這裡`)
-      for (const line of DEMO_LEGEND) p.ui.log(`${label('K')} ${line}`)
-      return { text: 'UI 位置展示：開。每個能放 UI 的地方都標了〔字母〕，對照表見下方卡片與灰字。' }
     }
     case 'doctor': {
       for (const line of await p.keys.report()) p.ui.log(line)
