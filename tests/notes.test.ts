@@ -97,6 +97,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       lastPromptUuid: async () => 'msg-uuid-1',
       lastSampleId: async () => state.lastSample,
       setLastSampleId: async id => void (state.lastSample = id),
+      setSelected: async () => {},
     },
   }
   return {

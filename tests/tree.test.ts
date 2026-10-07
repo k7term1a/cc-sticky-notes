@@ -11,7 +11,9 @@ import {
   loadTree,
   markPromoted,
   keys,
+  migrateLegacy,
   mutateTree,
+  normalizeRoot,
   pathTo,
   refreshOutline,
   removeNode,
@@ -285,5 +287,51 @@ describe('store layout (one key per node / outline / session)', () => {
     expect((await loadTree(kv, '/q')).roots).toEqual(['other'])
     await kv.delete(keys.node('/p', 'r1'))
     expect((await loadTree(kv, '/p')).roots).toEqual(['c1'])
+  })
+})
+
+describe('migrating the first M0 layout (one tree:<root> key)', () => {
+  test('nodes, activeThread and tags move to their own keys; the old key goes', async () => {
+    const kv = memKV()
+    const old = (id: string, parentId: string | null, at: number) => ({
+      ...n(id, A, at),
+      parentId,
+      outlineId: null,
+      anchor: { sessionId: A, turnId: null, at, mainSnippet: '' }, // no messageId yet
+      answer: 'a',
+      title: id,
+      summary: null,
+      tags: [],
+      promotedAt: null,
+      promotedTo: null, // renamed promotedIn since
+      children: parentId === null ? ['c1'] : [],
+    })
+    await kv.set('tree:C:\\Users\\me\\proj', {
+      version: 2,
+      nodes: { r1: old('r1', null, 1), c1: old('c1', 'r1', 2) },
+      roots: ['r1'],
+      outlines: {},
+      activeThread: { [A]: 'r1' },
+      tags: ['db'],
+      mainDigest: null,
+    })
+    // the new key spells the same folder the way repo().root does
+    expect(await migrateLegacy(kv, 'C:/Users/me/proj')).toBe(2)
+    expect(await kv.get('tree:C:\\Users\\me\\proj')).toBeUndefined()
+    const t = await loadTree(kv, 'C:/Users/me/proj')
+    expect(t.roots).toEqual(['r1'])
+    expect(t.nodes.r1?.children).toEqual(['c1'])
+    expect(t.nodes.c1).toMatchObject({ promotedIn: null, anchor: { messageId: null } })
+    expect('promotedTo' in t.nodes.c1!).toBe(false)
+    expect(t.activeThread).toEqual({ [A]: 'r1' })
+    expect(t.tags).toEqual(['db'])
+    // running it again finds nothing
+    expect(await migrateLegacy(kv, 'C:/Users/me/proj')).toBe(0)
+  })
+
+  test('normalizeRoot: one spelling for backslashes, trailing slashes and the drive letter', () => {
+    expect(normalizeRoot('C:\\Users\\me\\proj\\')).toBe('c:/Users/me/proj')
+    expect(normalizeRoot('c:/Users/me/proj')).toBe('c:/Users/me/proj')
+    expect(normalizeRoot('/home/me/proj/')).toBe('/home/me/proj')
   })
 })

@@ -14,9 +14,16 @@ export function emptyTree(): Tree {
   return { nodes: {}, roots: [], outlines: {}, activeThread: {}, tags: [], mainDigest: null }
 }
 
-/** The project key: repo root (shared across worktrees) or session root, without trailing separators. */
+/**
+ * The project key: repo root (shared across worktrees) or session root, in one
+ * spelling — forward slashes, no trailing slash, lower-case drive letter — since
+ * $.session.repo().root and $.session.root() may spell the same folder differently.
+ */
 export function normalizeRoot(root: string): string {
-  return root.replace(/[\\/]+$/, '')
+  return root
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`)
 }
 
 export const keys = {
@@ -29,6 +36,19 @@ export const keys = {
 /** First TITLE_MAX characters (code points, so CJK and emoji are not split). */
 export function fallbackTitle(question: string): string {
   return [...question.replace(/\s+/g, ' ').trim()].slice(0, TITLE_MAX).join('')
+}
+
+/** Depth-first rows for the pane: each node with its depth, children in anchor.at order. */
+export function flatten(tree: Tree, rootIds: readonly string[] = tree.roots): { node: TreeNode; depth: number }[] {
+  const out: { node: TreeNode; depth: number }[] = []
+  const walk = (id: string, depth: number) => {
+    const node = tree.nodes[id]
+    if (!node || depth > 64) return
+    out.push({ node, depth })
+    for (const c of node.children) walk(c, depth + 1)
+  }
+  for (const id of rootIds) walk(id, 0)
+  return out
 }
 
 /** Recomputes roots and children from parentId; a node whose parent is gone counts as a root. */
@@ -283,6 +303,55 @@ function readMeta(raw: unknown): TreeMeta {
   }
 }
 
+/** Fills fields older versions did not write (messageId; promotedTo → promotedIn). */
+function upgradeNode(raw: Record<string, unknown>): TreeNode {
+  const n = raw as Partial<TreeNode> & { promotedTo?: string | null }
+  const { promotedTo, ...rest } = n
+  return {
+    ...(rest as TreeNode),
+    anchor: { ...(n.anchor as TreeNode['anchor']), messageId: n.anchor?.messageId ?? null },
+    promotedIn: n.promotedIn ?? promotedTo ?? null,
+    children: [],
+  }
+}
+
+/**
+ * Moves a tree saved by the first M0 build (one `tree:<root>` key) into the
+ * per-node layout, then deletes the old key. Returns how many nodes moved.
+ */
+export async function migrateLegacy(store: KV, root: string): Promise<number> {
+  const r = normalizeRoot(root)
+  let moved = 0
+  for (const key of await store.keys()) {
+    if (!key.startsWith('tree:') || normalizeRoot(key.slice(5)) !== r) continue
+    const raw = await store.get(key)
+    if (isObj(raw) && isObj(raw.nodes)) {
+      for (const n of Object.values(raw.nodes)) {
+        if (!isObj(n) || typeof n.id !== 'string') continue
+        if ((await store.get(keys.node(r, n.id))) === undefined) {
+          await store.set(keys.node(r, n.id), { ...upgradeNode(n), children: [] })
+          moved++
+        }
+      }
+      if (isObj(raw.activeThread)) {
+        for (const [sid, a] of Object.entries(raw.activeThread)) {
+          if ((await store.get(keys.active(r, sid))) === undefined) await store.set(keys.active(r, sid), typeof a === 'string' ? a : null)
+        }
+      }
+      if (isObj(raw.outlines)) {
+        for (const o of Object.values(raw.outlines)) if (isObj(o) && typeof o.id === 'string') await store.set(keys.outline(r, o.id), o)
+      }
+      if ((await store.get(keys.meta(r))) === undefined) {
+        const tags = Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : []
+        const meta: TreeMeta = { version: 2, tags, mainDigest: (raw.mainDigest as MainDigest | null | undefined) ?? null }
+        await store.set(keys.meta(r), meta)
+      }
+    }
+    await store.delete(key)
+  }
+  return moved
+}
+
 /** Assembles one project's tree from its keys. */
 export async function loadTree(store: KV, root: string): Promise<Tree> {
   const r = normalizeRoot(root)
@@ -294,7 +363,7 @@ export async function loadTree(store: KV, root: string): Promise<Tree> {
   for (const key of all) {
     if (key.startsWith(keys.node(r, ''))) {
       const n = await store.get(key)
-      if (isObj(n) && typeof n.id === 'string') tree.nodes[n.id] = { ...(n as TreeNode), children: [] }
+      if (isObj(n) && typeof n.id === 'string') tree.nodes[n.id] = upgradeNode(n)
     } else if (key.startsWith(keys.outline(r, ''))) {
       const o = await store.get(key)
       if (isObj(o) && typeof o.id === 'string') tree.outlines[o.id] = o as Outline

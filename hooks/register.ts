@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand } from './commands'
-import { bookmarkNote, change, dropReason, readOptions, recordRoute, refresh, routePrompt, startNote } from './notes'
+import { bookmarkNote, change, dropReason, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
 import { bandView, PANE_ID, PANE_TITLE, paneView } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
@@ -81,11 +81,12 @@ function portsOf($: EngineInterface): Ports {
       lastPromptUuid: () => read($, lastPromptAtom),
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
+      setSelected: async id => void (await update($, selectedAtom, () => id)),
     },
   }
 }
 
-/** Pane click: show it and make it this session's activeThread; the band shows 正在追問. */
+/** Pane click: show it and make it this session's activeThread; the band shows 正在追問. 回到主線 passes null. */
 async function selectNode($: EngineInterface, id: string | null) {
   const p = portsOf($)
   const sessionId = await p.sessionId()
@@ -93,12 +94,22 @@ async function selectNode($: EngineInterface, id: string | null) {
   await change(p, t => setActive(t, sessionId, id))
 }
 
+/** The pane's follow-up box: straight to a note under that node, no Jev (PLAN.md). */
+async function followUp($: EngineInterface, opts: Options, parentId: string, question: string) {
+  await startNote(portsOf($), opts, {
+    question,
+    attach: { kind: 'under', parentId },
+    answerer: 'fork',
+    route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' },
+  })
+}
+
 export const register: Register = (on, options) => {
   const opts = readOptions(options)
 
   on('session.start', async ($, e, next) => {
     await $.command.register(COMMAND_SPEC)
-    await refresh(portsOf($))
+    await prepare(portsOf($))
     return next(e)
   })
 
@@ -175,7 +186,16 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
-    const data = { tree: await read($, treeAtom), selectedId: await read($, selectedAtom), sessionId: await $.session.id() }
-    return paneView($.ui.resolve(e), data, { select: id => void selectNode($, id) })
+    const data = {
+      tree: await read($, treeAtom),
+      selectedId: await read($, selectedAtom),
+      sessionId: await $.session.id(),
+      pending: await read($, pendingAtom),
+    }
+    return paneView($.ui.resolve(e), data, {
+      select: id => void selectNode($, id),
+      back: () => void selectNode($, null),
+      followUp: (parentId, question) => void followUp($, opts, parentId, question),
+    })
   })
 }

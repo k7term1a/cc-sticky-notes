@@ -13,7 +13,7 @@ import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
 import { ASK_OPTIONS, decide, decideFromAsk, NEEDS_CTX_AT, type Decision } from './route'
-import { addNode, loadTree, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
+import { addNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
   routeThreshold: number
@@ -64,6 +64,13 @@ export async function refresh(p: Ports): Promise<Tree> {
   const tree = await loadTree(p.store, await projectKey(p))
   await p.state.publishTree(tree)
   return tree
+}
+
+/** session.start: move a tree saved in the old one-key layout, then load. */
+export async function prepare(p: Ports): Promise<Tree> {
+  const moved = await migrateLegacy(p.store, await projectKey(p))
+  if (moved > 0) p.ui.log(`sticky-notes: moved ${moved} notes to the per-node store layout`, 'debug')
+  return refresh(p)
 }
 
 export async function change(p: Ports, fn: (t: Tree) => Tree): Promise<Tree> {
@@ -227,10 +234,19 @@ export async function startNote(p: Ports, opts: Options, req: NoteRequest): Prom
   )
   await p.state.setTurnsAtLastSidebar(await p.turns())
   await p.state.addPending(1)
+  // the pane follows the newest note of this session (its answer shows as it arrives)
+  await p.state.setSelected(id)
 
   // Answered outside the prompt.submit dispatch (PROBE.md: works, and the
-  // drop line shows at once instead of after the 1–3 s fork).
-  p.later(() => void answerNote(p, opts, id, req))
+  // drop line shows at once instead of after the 1–3 s fork). Nothing may
+  // escape a background job: a failure marks the note and says so.
+  p.later(() => {
+    answerNote(p, opts, id, req).catch(async (err: unknown) => {
+      p.ui.log(`sticky-notes: answering failed: ${String(err).slice(0, 200)}`, 'debug')
+      p.ui.toast('Sticky Notes：回答失敗')
+      await change(p, t => updateNode(t, id, { answer: '_(回答失敗)_' })).catch(() => {})
+    })
+  })
   return id
 }
 

@@ -54,5 +54,7 @@ export type Ports = {
     lastPromptUuid(): Promise<string | null>
     lastSampleId(): Promise<string | null>
     setLastSampleId(id: string | null): Promise<void>
+    /** The node the pane shows. */
+    setSelected(id: string | null): Promise<void>
   }
 }

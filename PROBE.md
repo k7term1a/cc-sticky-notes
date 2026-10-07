@@ -21,6 +21,23 @@
 
 ---
 
+## 〇之三、第一次在 Desktop 實際使用（10/07 下午）
+
+你在 Desktop 這個 session 試用的結果（截圖）：
+
+| 現象 | 原因 | 處理 |
+| --- | --- | --- |
+| 每一句都要手動選主線 / 旁支 | 這個 session 載入的是**舊版** mod（輸入框裡的「正在追問：…」灰字是舊版的 \`$.prompt.suggest\`）。舊版只從系統環境變數拿 key，拿不到就「每句都問」。Desktop 的 session 只在啟動時載入 mod，存檔不會自動重載 | 開新 session 或重啟 Desktop 就會用新版（從 \`.env\` 讀 key、缺 Jev 也不問）。想要存檔即重載：在 \`~/.claude/settings.json\` 的 \`env\` 加 \`"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"\`（reference：desktop 這類長駐 session 要設它才會 watch） |
+| 追問第二題後 pane 沒有出現新答案 | 答案其實有存（store 裡第二個節點 754 字、正確掛在第一題下）。pane 只列 root、不列追問，選中的也停在第一題 | pane 重做（下面）；本 session 建立的新節點會自動被選上，答案一到就顯示 |
+| 右邊 pane 不直觀 | 骨架只有一串按鈕 | 改成「標題列 → 便利貼樹（框）→ 選中的卡片（框）→ 提示行」，見 \`hooks/pane.tsx\` 檔頭的示意圖 |
+
+**pane 第一版版面**（仍待你對齊外觀）：便利貼樹用縮排 + \`└\` 列出所有追問，\`●\` 是本 session 正在追問的、\`◀\` 是目前選中的、\`…\` 是回答中、\`↑\` 是已回流；選中的卡片顯示「時間 · 誰答的（看不看得到專案）· 第幾層」、前面幾層各一行摘要、這一題的問題與完整答案、pane 內追問框（不經 Jev，直接掛在這一則下）、「回到主線」；最下面一行提示「在主輸入框直接打字＝追問『X』」。
+
+**順帶修的**：
+- 舊版存的是單一 \`tree:<root>\` key，新版第一次啟動會自動搬到每節點一個 key（\`migrateLegacy\`，有測試），你那兩張便利貼不會不見。
+- 專案 key 統一成正斜線、小寫磁碟代號：\`repo().root\` 和 \`root()\` 可能寫法不同（\`C:/…\` vs \`C:\\…\`），不統一的話同一個專案會分成兩棵樹。
+- 背景回答若丟出例外，現在會標記節點「回答失敗」並 toast，不再變成沒人處理的 rejection（UI 測試抓到的）。
+
 ## 〇之二、第三輪（10/07 中午）：決定已套用、M1 完成
 
 用 Desktop 新內建的 **2.1.289**（`.claude-plugin/types/claude-code/index.d.ts` 首行已是 2.1.289）跑 validate / test / 探針；PATH 上的 `claude` 仍是 2.1.283。
@@ -321,7 +338,7 @@ classify: (text: string, labels: readonly string[], options?: { model?: string }
 
 - `claude plugin validate .`：✅ passed（只剩 manifest 層級的提示）
 - `tsc -p .`（TypeScript 5.6，含 tests）：✅ 0 errors
-- `claude plugin test .`：✅ **78 pass / 0 fail**（7 個檔，第三輪；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
+- `claude plugin test .`：✅ **81 pass / 0 fail**（7 個檔；ui.test 新增「樹 + 點選 + 追問框」的整合測試，tree.test 新增舊格式搬移；新增 `feedback.test.ts`：回饋解析 / 上限 / 校正、P10 遮罩、金鑰檔順序；`tree.test.ts` 新增拆 key 的併發測試）
   - `tree.test.ts`：掛接（root / 三層追問 / 點回上層長出兄弟節點 / 每 session 各自的 activeThread / 父節點不存在退成 root）、大綱（只收 root、搬移、stale、重算、刪除）、removeNode、store round-trip
   - `route.test.ts`：決策表每一列、門檻邊界、follow-up / root、fork / provider、tag、`$.ui.ask` 回答對應
   - `redact.test.ts`：code fence、路徑、長英數串、`KEY=value`、一般中文不動
