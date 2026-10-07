@@ -7,6 +7,7 @@ import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_CO
 import { bookmarkNote, change, explainDrop, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
+import { CONTEXT_MARKER, isProbePrompt, longQuestion, PREVIEW_QUESTION, probeCommand, RCPROBE_LOG, RCPROBE_ON } from './rcprobe' // TEMPORARY
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
 
@@ -120,12 +121,65 @@ async function followUp($: EngineInterface, opts: Options, parentId: string, que
   })
 }
 
+// ---- TEMPORARY: Remote Control probe (PROBE.md「Remote Control」; delete with rcprobe.ts) ----
+let probeOn = false
+const probeSeen = new Set<string>()
+
+async function probeLog($: EngineInterface, kind: string, data: unknown) {
+  const list = ((await $.store.get(RCPROBE_LOG)) as unknown[] | undefined) ?? []
+  list.push({ t: await $.clock.now(), kind, data })
+  await $.store.set(RCPROBE_LOG, list.slice(-300))
+}
+
+async function probeMark($: EngineInterface, component: string, surface: string) {
+  if (probeSeen.has(`${component}@${surface}`)) return
+  probeSeen.add(`${component}@${surface}`)
+  await probeLog($, 'render', { component, surface })
+}
+
+/** Logs a prompt; answers the probe's own drop / ask prompts, or returns null to go on. */
+async function probePrompt($: EngineInterface, e: { text: string; origin: unknown; turnId?: string; wait: boolean }) {
+  if (!probeOn && !isProbePrompt(e.text)) return null
+  await probeLog($, 'prompt.submit', {
+    keys: Object.keys(e),
+    origin: e.origin,
+    turnId: e.turnId ?? null,
+    wait: e.wait,
+    text: e.text.slice(0, 40),
+    surfaces: await $.session.surfaces(),
+  })
+  const cmd = probeCommand(e.text)
+  if (cmd === 'drop') return { drop: 'rcprobe: dropped by prompt.submit ({ drop })' }
+  if (cmd !== 'ask' && cmd !== 'askpreview') return null
+  $.clock.after(3000, () => {
+    void (async () => {
+      const t0 = await $.clock.now()
+      try {
+        if (cmd === 'ask') {
+          const q = longQuestion()
+          const answer = await $.ui.ask(q, { options: ['收到', '看不到完整問題'], header: 'rcprobe' })
+          await probeLog($, 'ui.ask', { answer, ms: (await $.clock.now()) - t0, questionChars: [...q].length })
+        } else {
+          const r = await $.tool.call({ tool: 'AskUserQuestion', questions: [PREVIEW_QUESTION] } as never)
+          await probeLog($, 'AskUserQuestion(tool.call)', { result: r, ms: (await $.clock.now()) - t0 })
+        }
+      } catch (err) {
+        await probeLog($, `${cmd} rejected`, { error: String(err).slice(0, 300), ms: (await $.clock.now()) - t0 })
+      }
+    })()
+  })
+  return { drop: `rcprobe: dropped; ${cmd} in 3 s` }
+}
+// ---- end TEMPORARY ----
+
 export const register: Register = (on, options) => {
   const opts = readOptions(options)
 
   on('session.start', async ($, e, next) => {
     await $.command.register(COMMAND_SPEC)
     await $.command.register(SHORT_COMMAND_SPEC)
+    probeOn = (await $.store.get(RCPROBE_ON)) === true // TEMPORARY
+    await $.command.register({ name: 'rcprobe', description: 'TEMP Remote Control probe: on | off | clear', argumentHint: 'on | off | clear' }) // TEMPORARY
     await prepare(portsOf($))
     return next(e)
   })
@@ -158,6 +212,14 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    const probed = await probePrompt($, e) // TEMPORARY
+    if (probed !== null) return probed
+    if (isProbePrompt(e.text)) {
+      // the probe's own prompts skip the router; everything else routes as usual
+      const r = await next(e)
+      await probeLog($, 'prompt.submit result', { result: r })
+      return r
+    }
     // Only the person's own typed prompts are routed; notifications, peers and plugins pass.
     if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)
     if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
@@ -206,4 +268,54 @@ export const register: Register = (on, options) => {
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
     })
   })
+
+  // ---- TEMPORARY: Remote Control probe hooks ----
+  on('command.run', { command: 'rcprobe' }, async ($, e) => {
+    const arg = e.args.trim()
+    if (arg === 'clear') await $.store.set(RCPROBE_LOG, [])
+    if (arg === 'on' || arg === 'off') {
+      probeOn = arg === 'on'
+      await $.store.set(RCPROBE_ON, probeOn)
+      probeSeen.clear()
+      $.ui.invalidate('ui.render')
+    }
+    await probeLog($, 'command', { arg, origin: e.origin, surfaces: await $.session.surfaces() })
+    $.ui.toast(`rcprobe ${probeOn ? 'on' : 'off'}`)
+    return {}
+  })
+  on('session.attach', async ($, e, next) => {
+    await probeLog($, 'session.attach', { e, surfaces: await $.session.surfaces() })
+    return next(e)
+  })
+  on('session.detach', async ($, e, next) => {
+    await probeLog($, 'session.detach', { e })
+    return next(e)
+  })
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    if (!probeOn && !isProbePrompt(e.prompt)) return next(e)
+    await probeLog($, 'classic.UserPromptSubmit', { source: e.source ?? null, prompt: e.prompt.slice(0, 40), keys: Object.keys(e) })
+    const r = await next(e)
+    if (e.prompt.trimStart().startsWith('rcprobe-suppress')) {
+      return { ...r, suppressOriginalPrompt: true, additionalContext: [...(r.additionalContext ?? []), `rcprobe context marker ${CONTEXT_MARKER}`] }
+    }
+    if (e.prompt.trimStart().startsWith('rcprobe-block')) return { ...r, block: 'rcprobe: blocked by classic.UserPromptSubmit (block)' }
+    return r
+  })
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (!probeOn) return next(e)
+    await probeMark($, 'AbovePrompt', e.surface)
+    const { Text } = $.ui.resolve(e)
+    return <Text>[rcprobe AbovePrompt] surface={e.surface}</Text>
+  })
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (!probeOn) return next(e)
+    await probeMark($, 'PromptHint', e.surface)
+    const { Text } = $.ui.resolve(e)
+    return <Text>[rcprobe PromptHint] surface={e.surface}</Text>
+  })
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (probeOn) await probeMark($, 'UserMessage', e.surface)
+    return next(e)
+  })
+  // ---- end TEMPORARY ----
 }
