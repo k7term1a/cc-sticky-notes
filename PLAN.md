@@ -23,7 +23,7 @@ Oct 6, 2026 · @楷奇
 7. 統整層預設走 Claude 訂閱（`$.model.complete`，可選模型與 effort），裝了就能用；設定 `summaryProvider = openai` 可改走 OpenAI 免費額度，兩條路功能相同。
 8. 不論哪個供應者，除了每節點的標題與摘要之外，會花額度的動作全部由我按下去才發生；OpenAI 超過 cap 就暫停並詢問。
 9. 沒有 Jev key 時所有輸入都進主線，只有 `/sticky-note new` 和 pane 追問框能建 note；不會跳對話框問我。
-10. 本機（composer）和 Remote Control 遠端（bridge）送出的 prompt 走同一套流程；對話框在遠端也看得到、能作答（PROBE.md「Remote Control」）。
+10. Remote Control 遠端（bridge）送出的 prompt 不跳便利貼對話框：本機會問的那些句子，遠端一律進主線；其餘（Jev 分類、project_question 的 context、回饋紀錄）和本機（composer）相同（PROBE.md「Remote Control」）。
 
 ## 核心概念
 
@@ -285,7 +285,7 @@ main_turns_since_last_sidebar: <整數>
 
 **路由回饋**：每一句 Jev 看過的 prompt 都在 `$.store` 記一筆 `feedback:<root>:<id>` = `{ Jev 判斷, 信心, 使用者選擇 }`（另含 prompt 前 200 字、當時門檻、是否有問、最後去了哪、建出的節點；每專案最多 500 筆，只存本機）。對話框的選擇直接當成使用者選擇；Jev 直接放進主線、沒有問的那句，之後可以用 `/sticky-note feedback main|new|followup` 補上。`/sticky-note calibrate` 依這些紀錄算出每個門檻下「不問直接進主線幾句、其中幾句你也要主線、會跳幾成對話框」。
 
-**本機與遠端**：本機（`origin.kind = 'composer'`）和 Remote Control 遠端（`'bridge'`）走同一套，不另做遠端交付。對話框（`$.ui.ask`）會轉送到遠端、能作答；遠端看不到 drop 提示、狀態列、pane、toast（PROBE.md「Remote Control」RC1）。遠端作答後轉圈不停（RC4）是已知問題，之後再看。
+**本機與遠端**：Remote Control 遠端（`origin.kind = 'bridge'`）的 prompt 照樣送 Jev，但**不跳對話框**：決策表會走到 `$.ui.ask` 的那些句子，遠端一律 `next(e)` 進主線（回饋紀錄 `asked: false`、`choice: null`，之後可用 `/sn feedback` 補）。`main_task` 與 `project_question` 照決策表，和本機（`'composer'`）相同。原因：遠端看不到 drop 提示、狀態列、pane、toast（PROBE.md「Remote Control」RC1），作答後還會轉圈不停（RC4）。
 
 **沒有 Jev key 時**：不分類、不問，所有輸入都走主線；只有 `/sticky-note new` 和 pane 追問框能建 note。不用 `$.model.classify` 當退路——它沒有信心值，分錯也看不出來，等於把「不要吞掉我的話」交給一個看不見的判斷。
 

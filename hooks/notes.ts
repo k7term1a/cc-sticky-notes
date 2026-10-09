@@ -159,10 +159,10 @@ export type Routed = {
 /**
  * Jev, then the decision table (route.ts). Jev never makes a note by itself:
  * a confident main_task goes through, anything that might be a note asks.
- * No Jev (no key, an error) → main line, no dialog. Local (composer) and
- * Remote Control (bridge) prompts take the same path; the dialog reaches both.
+ * No Jev (no key, an error) → main line, no dialog. A Remote Control (bridge)
+ * prompt never gets the dialog: where it would ask, it goes to the main line.
  */
-export async function routePrompt(p: Ports, opts: Options, prompt: string): Promise<Routed> {
+export async function routePrompt(p: Ports, opts: Options, prompt: string, via: { remote?: boolean } = {}): Promise<Routed> {
   const sessionId = await p.sessionId()
   const tree = await refresh(p)
   const activeId = tree.activeThread[sessionId] ?? null
@@ -174,6 +174,7 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string): Prom
   }
   const decision = decide(r.verdict, { route: opts.routeThreshold, followup: opts.followupThreshold })
   if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: false, choice: null, activeTitle }
+  if (via.remote) return { decision: { kind: 'main' }, verdict: r.verdict, asked: false, choice: null, activeTitle }
   const dialog = askPrompt(r.verdict, { activeTitle, followupThreshold: opts.followupThreshold })
   try {
     const answer = await p.ui.ask(dialog.question, dialog.options.map(o => o.label), 'Sticky Notes')

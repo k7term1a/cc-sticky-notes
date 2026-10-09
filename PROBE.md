@@ -32,7 +32,7 @@
 - **節點**：`route = { label: 'new' | 'followup', confidence: <Jev 信心>, source: 'ask' }`。
 - **回饋紀錄**：`feedback:<root>:<id>` = `{ jev: { route, confidence, isFollowup, needsProjectCtx, tag }, choice, choiceSource, asked, outcome, prompt 前 200 字, thresholds, nodeId }`，每一句 Jev 看過的都記（不只問過的）。Jev 直接放行、沒問的那句 `choice` 先是 null，可用 `/sn feedback main|new|followup|good` 補。原本的 `route:<root>:<id>` 樣本不再寫，舊資料留著不讀。
 - **drop 卡片**的說明改成「cc-sticky-note：新的便利貼「…」」／「接在「<標題>」下「…」」（便利貼一定是你選的，不再寫「Jev 96% 判斷是…」）。
-- **本機與遠端同一套**：`composer` 和 `bridge` 不分流，沒有 remoteDeliver / remoteBehavior / passthrough；上一節「建議」的 (a)(b)(c) 不採用。RC1（B 看不到 drop 提示等）照舊，但對話框會到 B，你在 B 上選了才會建便利貼，所以 B 上的「話被吞掉」只剩選完之後那一下。RC4 為已知問題。
+- ~~**本機與遠端同一套**~~（10/09 改）：遠端（`bridge`）的 prompt **不跳便利貼對話框**，會問的那些句子一律進主線；Jev 照樣分類、照樣記回饋、`project_question` 照樣加 context。等於上一節「建議」的 (c)「遠端不攔」。所以 B 上不會再有話被吞掉，也不會碰到 RC4（B 作答後轉圈）。沒有 remoteDeliver / remoteBehavior / passthrough。
 
 **pane 被拒絕畫（10/07 晚，你回報的）**：「ui.render (Pane) refused: a text child longer than 10000 characters」。`Text` 與 `Markdown` 一段最多 10000 字（型別檔 MarkdownProps / CodeProps 有寫），超過就整棵樹被拒、引擎改畫自己的。原因是 `2026-apac-hpcai` 專案有一張便利貼的**問題本身 11810 字**（一大段貼上的內容）。已修：卡片裡的問題只顯示前 300 字並標「（共 N 字）」，答案超過 9000 字截斷並註明（`pane.tsx` `shownQuestion` / `shownAnswer`）；送給 Jev 的新的這句截到 1500 字、`active_thread_last_question` 截到 300 字（`jev.ts`；完整內容照樣存進便利貼、照樣送去回答）。有測試，拿掉修正會重現同一個錯誤。
 

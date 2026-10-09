@@ -181,6 +181,15 @@ describe('routePrompt: Jev never makes a note by itself', () => {
     expect(r).toMatchObject({ choice: 'followup', decision: { kind: 'sidebar', attach: 'followup' } })
   })
 
+  test('a Remote Control prompt never gets the dialog: where it would ask, it goes to the main line', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.99), askAnswer: NEW_NOTE_LABEL })
+    expect(await routePrompt(f.ports, opts, 'what is TCP backpressure', { remote: true })).toMatchObject({ decision: { kind: 'main' }, asked: false, choice: null })
+    expect(f.asked()).toBe(0)
+    // Jev still ran, so a confident project question still gets its context line
+    const g = fake({ typesafeKey: 'k', jev: jevSays('project_question', 0.9) })
+    expect((await routePrompt(g.ports, opts, '我們這裡為什麼用 cookie', { remote: true })).decision).toMatchObject({ kind: 'project_question' })
+  })
+
   test('a dismissed dialog keeps the prompt in the main line', async () => {
     const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.9) })
     expect(await routePrompt(f.ports, opts, 'x')).toMatchObject({ decision: { kind: 'main' }, asked: true, choice: null })

@@ -163,7 +163,7 @@ export const register: Register = (on, options) => {
     if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
 
     const p = portsOf($)
-    const routed = await routePrompt(p, opts, e.text)
+    const routed = await routePrompt(p, opts, e.text, { remote: e.origin.kind === 'bridge' })
     const keep = (nodeId: string | null) => p.later(() => void recordFeedback(p, opts, e.text, routed, nodeId))
     const d = routed.decision
     switch (d.kind) {
