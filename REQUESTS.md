@@ -118,8 +118,8 @@ PLAN.md 以外、之後可能做的需求。每項寫需求本身、可行性（
 | 不用 `{ drop }` 也能不進主線 | ✗ | `prompt.submit` 的結果只有兩種：送進去（`{ text }`），或 `{ drop: reason }`。hook 不呼叫 `next` 就等於 drop，畫面一定顯示原因 |
 | 攔下那一列，不存進對話 | ✗ | `session.append` 只能改一列的內容；型別檔：「Only a plugin's own append (door `note`) may be refused」，引擎自己的列不能拒絕 |
 | 改掉卡片的標題 | ✗ | 「A hook blocked your prompt」和「Prompt dropped by a hook:」是 Desktop 自己的字（PROBE.md〇之五）；mod 只能改後面的 reason |
-| 用壓縮模擬 rewind，把那一列拿掉 | 📄 技術上可以，不建議 | `$.session.compact` 加 `session.compact` hook 自己回傳「原本的訊息減掉 drop 那一列」。代價：(1) 每收一張便利貼就壓縮一次，主線的 prompt cache 失效，下一回合整段 context 重新計費；(2) 畫面上多一條壓縮分隔線，可能比卡片更干擾；(3) 回合進行中不能壓縮，只能等回合之間；(4) Desktop 的卡片是畫面元件，壓縮後會不會消失不確定 |
+| 用壓縮模擬 rewind，把那一列拿掉 | ✗（10/12 更正） | `session.compact` 的 `messages` 只有 `user` / `assistant` 兩種（`SessionMessage.role`），drop 留下的是引擎的提示列，不在清單裡，壓縮動不到它。被 drop 的那句本來就沒進模型的 context，主線 context 已經是乾淨的，卡片只是畫面上的紀錄 |
 
 ### 建議
 
-不做自動 rewind。能做的是讓卡片的 reason 更像「已收成便利貼」而不像錯誤（現在是「cc-sticky-note：新的便利貼「…」」，已經很短）。要的話可以加一個探針確認：壓縮後 Desktop 那張卡片會不會消失、cache 實際多花多少。
+不做自動 rewind（壓縮動不到那張卡片）。能做的是讓卡片的 reason 更像「已收成便利貼」而不像錯誤（現在是「cc-sticky-note：新的便利貼「…」」，已經很短）。要的話可以加一個探針確認：壓縮後 Desktop 那張卡片會不會消失、cache 實際多花多少。
