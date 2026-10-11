@@ -172,7 +172,7 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 | D3 | 缺 Jev（沒 key、錯誤、回應壞掉）→ 全部進主線，不跳對話框 | `route.ts` `decide(null)`、`notes.ts` |
 | D6 | 專案 key = `repo()?.root ?? root()` | `register.ts` `portsOf.projectRoot` |
 | D7 | `NEEDS_CTX_AT = 0.3` | `route.ts` |
-| D8 | `project_question` 建書籤節點（`promotedAt/promotedIn` = 當下），不成為 activeThread | `notes.ts` `bookmarkNote`、`tree.ts` `addNode(..., { makeActive: false })` |
+| D8 | ~~`project_question` 建書籤節點~~ → **10/12 拿掉**：進主線就是不要便利貼，`project_question` 只加 context、不建節點（你回報 pane 裡多出「在主線回答」的便利貼） | `register.tsx` `prompt.submit` |
 | D15 (a) + 回饋接口 | `project_question` 的描述加了「我們 / 這裡 / 這個專案」的中英例子；另做路由回饋接口（下節） | `jev.ts`、`hooks/feedback.ts` |
 | 摘要語言 | 跟著問題；中文一律繁體（✅ 實測已是繁體） | `digest.ts` `LANGUAGE_RULE`（fork / 知識旁路也加了） |
 | OpenAI 推理 | `userConfig.openaiReasoningEffort`（預設 `minimal`，`none` = 不送參數） | `plugin.json`、`providers/openai.ts` |

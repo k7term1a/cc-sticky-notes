@@ -75,7 +75,7 @@ export type NewNode = {
   answer?: string
   title?: string
   tags?: string[]
-  /** Already promoted at creation (project_question bookmark). */
+  /** Already promoted at creation (no caller since the project_question bookmark was removed, 10/12). */
   promotedAt?: number | null
   promotedIn?: string | null
 }
@@ -89,8 +89,8 @@ export type Attach =
   | { kind: 'under'; parentId: string }
 
 /**
- * Adds a node. By default it becomes this session's activeThread; a
- * project_question bookmark passes `makeActive: false`.
+ * Adds a node. By default it becomes this session's activeThread;
+ * `makeActive: false` leaves the activeThread alone.
  * A follow-up whose parent is gone becomes a root rather than failing.
  */
 export function addNode(

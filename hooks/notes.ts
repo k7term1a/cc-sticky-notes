@@ -295,25 +295,6 @@ export async function startNote(p: Ports, opts: Options, req: NoteRequest): Prom
   return id
 }
 
-/**
- * project_question: the prompt goes to the main line with context; the tree
- * keeps a bookmark that is already "promoted" and never becomes activeThread.
- */
-export async function bookmarkNote(p: Ports, question: string, route: NoteRequest['route']): Promise<string> {
-  const anchor = await anchorFor(p)
-  const id = crypto.randomUUID()
-  await change(p, t =>
-    addNode(
-      t,
-      anchor.sessionId,
-      { id, question, anchor, route, answeredBy: 'claude', promotedAt: anchor.at, promotedIn: anchor.sessionId },
-      { kind: 'root' },
-      { makeActive: false },
-    ).tree,
-  )
-  return id
-}
-
 export async function answerNote(p: Ports, opts: Options, id: string, req: NoteRequest): Promise<void> {
   const provider = summaryProvider(p, opts)
   try {

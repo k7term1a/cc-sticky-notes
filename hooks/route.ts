@@ -8,7 +8,7 @@
 //   main_task,        confidence ≥ threshold    → main, no dialog
 //   main_task,        confidence < threshold    → ask
 //   sidebar_knowledge, any confidence           → ask
-//   project_question, confidence ≥ threshold    → main + context + bookmark
+//   project_question, confidence ≥ threshold    → main + context (no note)
 //   project_question, confidence < threshold    → ask
 import type { AskChoice } from '../types'
 import type { JevVerdict, RouteLabel } from './jev'

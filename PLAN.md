@@ -227,7 +227,7 @@ interface Outline {
 - **新 root 由 Jev 決定**：`is_followup = false`（或本 session 沒有 `activeThread`）→ `parentId = null`，本 session 的 `activeThread = 新 id`。
 - **追問掛在目前節點下**：`is_followup = true` → `parentId = active:<root>:<sessionId>`，`activeThread = 新 id`。
 - **一個節點可以長出多個子問題**：點回某個較上層的節點再問，新節點就掛在它底下、和既有子節點並列。
-- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。`project_question` 的書籤節點不會成為 `activeThread`。
+- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。
 - 整合大綱：只接受 root；已屬於別的大綱的 root 會被搬過來（UI 提示）；成員被搬光的舊大綱直接刪除；大綱本身不能被選取。
 - 成員之後有新追問 → 該大綱 `staleSince = now`，不自動重算。
 - 回流只送 `title + summary`，不送全文，目標是目前這個 session（`$.prompt.submit({ asUser: true })`）。不做跨 session 傳送：樹本來就是共用的，要帶進另一個 session 就到那邊開 pane、點同一個節點、回流。
@@ -272,7 +272,7 @@ main_turns_since_last_sidebar: <整數>
 | `main_task` | ≥ routeThreshold（0.6） | `next(e)`，不問 |
 | `main_task` | < routeThreshold | `$.ui.ask` |
 | `sidebar_knowledge` | 任何信心 | `$.ui.ask` |
-| `project_question` | ≥ routeThreshold | `next({...e, context: ['[sticky-notes] project question; answer briefly']})`，並在 pane 記一個 `promotedAt = now` 的節點作書籤（不成為 activeThread） |
+| `project_question` | ≥ routeThreshold | `next({...e, context: ['[sticky-notes] project question; answer briefly']})`，不建節點（進主線就是不要便利貼，10/12） |
 | `project_question` | < routeThreshold | `$.ui.ask` |
 
 **對話框**：問題文字帶 Jev 的判斷與信心，例如「這句要怎麼處理？(Jev：知識旁問 96%)」。

@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { bookmarkNote, change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
@@ -172,7 +172,8 @@ export const register: Register = (on, options) => {
         keep(null)
         return next(e)
       case 'project_question':
-        keep(await bookmarkNote(p, e.text, d.route))
+        // the main line answers it; no note (going to the main line means no note)
+        keep(null)
         return next({ ...e, context: [...(e.context ?? []), d.context] })
       case 'sidebar':
         keep(

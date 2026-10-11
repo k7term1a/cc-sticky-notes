@@ -3,7 +3,7 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
-import { bookmarkNote, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { statusLine } from '../hooks/pane'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL } from '../hooks/route'
@@ -277,16 +277,6 @@ describe('notes end to end (stubbed fork and complete)', () => {
     const t = await f.tree()
     expect(t.nodes[b]?.parentId).toBeNull()
     expect(t.activeThread).toEqual({ S1: a, S2: b })
-  })
-
-  test('a project_question bookmark is promoted and never becomes activeThread', async () => {
-    const f = fake()
-    const a = await note(f, 'side', 'root')
-    const bm = await bookmarkNote(f.ports, '為什麼我們這裡用 X？', { label: 'project_question', confidence: 0.9, source: 'jev' })
-    const t = await f.tree()
-    expect(t.activeThread.S1).toBe(a)
-    expect(t.nodes[bm]).toMatchObject({ promotedIn: 'S1', answer: '' })
-    expect(t.nodes[bm]?.promotedAt).not.toBeNull()
   })
 })
 
