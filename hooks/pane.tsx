@@ -103,6 +103,8 @@ export type PaneData = {
   facts: readonly { id: string; text: string; source: 'auto' | 'manual' }[]
   digestEvery: number
   provider: 'claude' | 'openai'
+  /** The last digest run of this session: running, or when it ended and how (in words). */
+  digestStatus: { running: boolean; at: number | null; result: string | null }
 }
 
 export type PaneActions = {
@@ -216,7 +218,16 @@ function contextCard(els: ElementTable, d: PaneData, act: PaneActions): RenderEl
           }}
         />
       )}
-      <Button key="digest-now" plain dimColor label="立即統整" onPress={() => act.refreshDigest()} />
+      <Box flexDirection="row" columnGap={2} alignItems="center">
+        {d.digestStatus.running ? (
+          <Text color="claude">統整中…</Text>
+        ) : (
+          <Button key="digest-now" plain dimColor label="立即統整" onPress={() => act.refreshDigest()} />
+        )}
+        {!d.digestStatus.running && d.digestStatus.at !== null && (
+          <Text dimColor>{`上次 ${when(d.digestStatus.at).slice(6)}：${d.digestStatus.result ?? ''}`}</Text>
+        )}
+      </Box>
     </Box>
   )
 }

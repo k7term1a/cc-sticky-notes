@@ -60,6 +60,8 @@ export type Ports = {
     setSelected(id: string | null): Promise<void>
     /** The digest or the project context changed in the store: the pane draws them again. */
     contextChanged(): Promise<void>
+    /** R4: a digest run started (`result` null) or ended with `result`, shown on the context card. */
+    setDigestStatus(running: boolean, result: string | null): Promise<void>
   }
   /**
    * This plugin's own userConfig field, as the plugin settings show it: written to

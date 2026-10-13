@@ -5,7 +5,7 @@ import type { CommandRunResult } from 'claude-code'
 
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
-import { change, digestNow, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { change, digestNow, digestWords, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -141,8 +141,8 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
         return {}
       }
       if (verb === 'refresh') {
-        p.ui.toast('Sticky Notes：背景統整中…')
-        p.later(() => void digestNow(p, opts, true).then(r => p.ui.toast(`Sticky Notes：${r === 'digest written' || r.startsWith('digest written') ? '統整完成' : `沒有統整（${r}）`}`)))
+        p.ui.toast('Sticky Notes：背景統整中…（結果會顯示在 pane 的「專案脈絡」卡片）')
+        p.later(() => void digestNow(p, opts, true).then(r => p.ui.toast(`Sticky Notes：${digestWords(r)}`)))
         return {}
       }
       if (verb !== '') return { text: '用法：/sn ctx [add <文字> | rm <n> | refresh]' }

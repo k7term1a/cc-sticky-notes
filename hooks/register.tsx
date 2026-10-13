@@ -17,6 +17,7 @@ const treeAtom = atom({ plugin: 'cc-sticky-notes', key: 'tree' } as const, null)
 const selectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'selectedId' } as const, null)
 const editingAtom = atom({ plugin: 'cc-sticky-notes', key: 'editingId' } as const, null)
 const contextRevAtom = atom({ plugin: 'cc-sticky-notes', key: 'contextRev' } as const, 0)
+const digestStatusAtom = atom({ plugin: 'cc-sticky-notes', key: 'digestStatus' } as const, { running: false, at: null, result: null })
 const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0)
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
@@ -141,6 +142,8 @@ function portsOf($: EngineInterface): Ports {
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
       contextChanged: async () => void (await update($, contextRevAtom, n => n + 1)),
+      setDigestStatus: async (running, result) =>
+        void (await update($, digestStatusAtom, s => (running ? { ...s, running: true } : { running: false, at: Date.now(), result }))),
     },
   }
 }
@@ -157,7 +160,7 @@ async function selectNode($: EngineInterface, id: string | null) {
 /** R4: what the project context card shows; read on each draw (contextRev makes it draw again). */
 async function contextData($: EngineInterface, opts: Options) {
   await read($, contextRevAtom)
-  const how = { digestEvery: opts.digestEvery, provider: opts.summaryProvider }
+  const how = { digestEvery: opts.digestEvery, provider: opts.summaryProvider, digestStatus: await read($, digestStatusAtom) }
   try {
     const p = portsOf($)
     const root = await projectKey(p)
@@ -314,10 +317,10 @@ export const register: Register = (on, options) => {
       addFact: text =>
         void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
       removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),
+      // the card itself shows 統整中… and then the outcome (digestStatus)
       refreshDigest: () => {
         const p = portsOf($)
-        p.ui.toast('Sticky Notes：背景統整中…')
-        p.later(() => void digestNow(p, opts, true).then(r => p.ui.toast(r.startsWith('digest written') ? 'Sticky Notes：統整完成' : `Sticky Notes：沒有統整（${r}）`)))
+        p.later(() => void digestNow(p, opts, true))
       },
     })
   })

@@ -5,7 +5,7 @@ import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
-import { digestNow, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -20,6 +20,7 @@ type Fake = {
   openaiCalls: number
   openaiBodies: string[]
   contextChanges: () => number
+  digestRuns: { running: boolean; result: string | null }[]
   options: Record<string, unknown>
   forkPrompts: string[]
   toasts: string[]
@@ -55,6 +56,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   let openaiCalls = 0
   let opened = 0
   let contextChanges = 0
+  const digestRuns: { running: boolean; result: string | null }[] = []
   const openaiBodies: string[] = []
   const options: Record<string, unknown> = {}
   let now = 1000
@@ -126,6 +128,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       setLastSampleId: async id => void (state.lastSample = id),
       setSelected: async () => {},
       contextChanged: async () => void contextChanges++,
+      setDigestStatus: async (running, result) => void digestRuns.push({ running, result }),
     },
   }
   return {
@@ -137,6 +140,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     },
     openaiBodies,
     contextChanges: () => contextChanges,
+    digestRuns,
     options,
     forkPrompts,
     toasts,
@@ -377,6 +381,14 @@ describe('R4: the main-line digest and the project context', () => {
     expect(await digestNow(f.ports, opts, true)).toBe('digest written')
     expect((await readFacts(f.kv, ROOT)).map(x => x.text)).toEqual(['我們用 session cookie，不用 JWT'])
     expect(f.contextChanges()).toBe(2)
+    // the card saw each run start and end, in words
+    expect(f.digestRuns).toEqual([
+      { running: true, result: null },
+      { running: false, result: '完成，新增 1 條脈絡' },
+      { running: true, result: null },
+      { running: false, result: '完成，沒有新的脈絡' },
+    ])
+    expect(digestWords('no exchanges')).toBe('沒有統整：主線還沒有對話')
     // Jev reads the digest and the facts
     await routePrompt(f.ports, opts, 'fix the login bug')
     const state = (f.jevCalls.at(-1) as { state: string }).state

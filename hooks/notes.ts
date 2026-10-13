@@ -284,16 +284,35 @@ export async function digestNow(p: Ports, opts: Options, force = false): Promise
   const sessionId = await p.sessionId()
   const turns = await p.turns()
   if (!force && !digestDue(opts.digestEvery, turns, await readDigest(p.store, root, sessionId))) return 'not due'
-  const r = await runDigest(
-    { kv: p.store, provider: summaryProvider(p, opts), root, sessionId, turns, now: await p.now(), newId: () => crypto.randomUUID() },
-    lastExchanges(await p.messages(), isTypedPrompt),
-  )
-  if (!r.ok) {
-    p.ui.log(`sticky-notes: main digest skipped (${r.reason})`, 'debug')
-    return r.reason
+  // the context card shows the run: 統整中… now, then how it ended (DIGEST_WORDS)
+  await p.state.setDigestStatus(true, null)
+  let out = 'error'
+  try {
+    const r = await runDigest(
+      { kv: p.store, provider: summaryProvider(p, opts), root, sessionId, turns, now: await p.now(), newId: () => crypto.randomUUID() },
+      lastExchanges(await p.messages(), isTypedPrompt),
+    )
+    if (!r.ok) {
+      p.ui.log(`sticky-notes: main digest skipped (${r.reason})`, 'debug')
+      out = r.reason
+    } else out = r.added > 0 ? `digest written, ${r.added} new fact(s)` : 'digest written'
+  } catch (err) {
+    out = `error ${String(err).slice(0, 120)}`
+  } finally {
+    await p.state.setDigestStatus(false, digestWords(out))
+    await p.state.contextChanged()
   }
-  await p.state.contextChanged()
-  return r.added > 0 ? `digest written, ${r.added} new fact(s)` : 'digest written'
+  return out
+}
+
+/** A digest run's outcome in the card's words. */
+export function digestWords(out: string): string {
+  const added = /^digest written, (\d+) new fact/.exec(out)
+  if (added) return `完成，新增 ${added[1]} 條脈絡`
+  if (out === 'digest written') return '完成，沒有新的脈絡'
+  if (out === 'no exchanges') return '沒有統整：主線還沒有對話'
+  if (out === 'malformed answer') return '沒有統整：統整層的回答格式不對'
+  return `沒有統整：${out}`
 }
 
 /** What a routed prompt became, in the record's words. */
