@@ -14,6 +14,7 @@ import { addUsage, claudeDelta, fetchDelta, readUsage, usageLine, type Usage } f
 // $.state values (types/index.d.ts). The loader reads atoms only from this file's own consts.
 const treeAtom = atom({ plugin: 'cc-sticky-notes', key: 'tree' } as const, null)
 const selectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'selectedId' } as const, null)
+const editingAtom = atom({ plugin: 'cc-sticky-notes', key: 'editingId' } as const, null)
 const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0)
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
@@ -130,15 +131,39 @@ function portsOf($: EngineInterface): Ports {
   }
 }
 
-/** Pane click: show it and make it this session's activeThread. 回到主線 passes null. */
+/**
+ * A card press: opens the card holding this note (null closes). Reading a card does not
+ * make it the one this session follows up (10/14): a reply does, or the dialog's pick.
+ */
 async function selectNode($: EngineInterface, id: string | null) {
-  const p = portsOf($)
-  const sessionId = await p.sessionId()
+  await update($, editingAtom, () => null)
   await update($, selectedAtom, () => id)
-  await change(p, t => setActive(t, sessionId, id))
 }
 
-/** The pane's follow-up box: straight to a note under that node, no Jev (PLAN.md). */
+/** 結束追問 on the green card: this session follows up no note. */
+async function unfollow($: EngineInterface) {
+  const p = portsOf($)
+  const sessionId = await p.sessionId()
+  await change(p, t => setActive(t, sessionId, null))
+}
+
+/**
+ * ✎: a rewritten question is asked again beside the old one — a new follow-up of the
+ * same parent, so the parent's answer offers both; a first question starts a new topic.
+ */
+async function rewrite($: EngineInterface, opts: Options, nodeId: string, question: string) {
+  const tree = await read($, treeAtom)
+  const parentId = tree?.nodes[nodeId]?.parentId ?? null
+  if (parentId !== null) return followUp($, opts, parentId, question)
+  await startNote(portsOf($), opts, {
+    question,
+    attach: { kind: 'root' },
+    answerer: 'fork',
+    route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' },
+  })
+}
+
+/** The pane's reply box: straight to a note under that node, no Jev (PLAN.md). */
 async function followUp($: EngineInterface, opts: Options, parentId: string, question: string) {
   await startNote(portsOf($), opts, {
     question,
@@ -226,13 +251,17 @@ export const register: Register = (on, options) => {
     const data = {
       tree: await read($, treeAtom),
       selectedId: await read($, selectedAtom),
+      editingId: await read($, editingAtom),
       sessionId: await $.session.id(),
       pending: await read($, pendingAtom),
+      surface: e.surface,
     }
     return paneView($.ui.resolve(e), data, {
       select: id => void selectNode($, id),
-      back: () => void selectNode($, null),
+      edit: id => void update($, editingAtom, () => id),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
+      rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
+      unfollow: () => void unfollow($),
     })
   })
 }

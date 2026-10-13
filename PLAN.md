@@ -227,7 +227,7 @@ interface Outline {
 - **新 root 由 Jev 決定**：`is_followup = false`（或本 session 沒有 `activeThread`）→ `parentId = null`，本 session 的 `activeThread = 新 id`。
 - **追問掛在目前節點下**：`is_followup = true` → `parentId = active:<root>:<sessionId>`，`activeThread = 新 id`。
 - **一個節點可以長出多個子問題**：點回某個較上層的節點再問，新節點就掛在它底下、和既有子節點並列。
-- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。
+- 使用者在 pane 回覆某張便利貼 → 新節點成為本 session 的 `activeThread`；只是點開卡片來看不會改變（10/14 卡片版 pane）。「結束追問」（原「回到主線」）設回 `null`。
 - 整合大綱：只接受 root；已屬於別的大綱的 root 會被搬過來（UI 提示）；成員被搬光的舊大綱直接刪除；大綱本身不能被選取。
 - 成員之後有新追問 → 該大綱 `staleSince = now`，不自動重算。
 - 回流只送 `title + summary`，不送全文，目標是目前這個 session（`$.prompt.submit({ asUser: true })`）。不做跨 session 傳送：樹本來就是共用的，要帶進另一個 session 就到那邊開 pane、點同一個節點、回流。

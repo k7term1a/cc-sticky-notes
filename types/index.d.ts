@@ -119,6 +119,8 @@ declare module 'claude-code' {
       tree: Tree | null
       /** Node shown in the pane's answer area. */
       selectedId: string | null
+      /** The question the pane is rewriting in place (✎), if any. */
+      editingId: string | null
       /** Unread sidebar answers since the pane was last opened (badge count). */
       unread: number
       /** "只看本 session" filter. */
