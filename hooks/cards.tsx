@@ -4,8 +4,7 @@
 // what was typed and asks nothing. Remove once the pane takes the design.
 //
 //  ╭────────────────────────────────────────╮   one card per topic (a root and its follow-ups)
-//  │ 樹載入原因                  10/07 · 3   │   closed: the whole card is one press
-//  │ 每個節點一個 key，避免兩個 session…      │
+//  │ 樹載入原因　10/07 10:41 · 3             │   closed: one line, the title and its time, one press
 //  ╰────────────────────────────────────────╯
 //  ╭────────────────────────────────────────╮   open: the thread as a conversation, no Q/A words —
 //  │ 樹載入原因                  10/07 · 3   │   the question is a prompt bubble on the right,
@@ -14,7 +13,7 @@
 //  │ [為何全讀節點] [存成一個 JSON 不行嗎]   │   several follow-ups: pick which one continues
 //  │        ╭ 沒看懂，為什麼需要讀取… ╮      │
 //  │ <answer>                                │
-//  │ [回覆…                       ] [送出]   │   the reply follows up the last answer shown
+//  │ [回覆…          ] [↵]                   │   the reply follows up the last answer shown
 //  ╰────────────────────────────────────────╯
 // The card this session follows up has a green border; every other is plain gray.
 import type { ElementTable, RenderElement, RenderSurface } from 'claude-code'
@@ -34,7 +33,6 @@ const clip = (s: string, n: number) => {
   const cps = [...s.replace(/\s+/g, ' ').trim()]
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
 }
-const gist = (n: TreeNode) => (n.answer === '' ? '回答中…' : clip(n.summary ?? n.answer, 60))
 const countAll = (tree: Tree, id: string): number => (tree.nodes[id]?.children ?? []).reduce((s, c) => s + 1 + countAll(tree, c), 0)
 
 /** Sample notes for a project that has none yet: one topic with two follow-ups, one plain, one still answering. */
@@ -128,8 +126,9 @@ export function cardsView(els: ElementTable, d: CardsData, act: CardsActions): R
         if (!open) {
           return (
             <Box key={`card:${id}`} borderStyle="round" paddingX={1} {...frame}>
-              {/* closed: one press anywhere on the text opens it (a Button holds one string) */}
-              <Button key={`open:${id}`} plain label={`${root.title}　${meta}\n${gist(root)}`} onPress={() => act.select(id)} />
+              {/* closed: the title and its time are one press (a Button holds one string, drawn on one
+                  line: Desktop ignores a newline in it and clips what overflows) */}
+              <Button key={`open:${id}`} plain label={`${root.title}　${meta}`} onPress={() => act.select(id)} />
             </Box>
           )
         }
@@ -165,19 +164,8 @@ export function cardsView(els: ElementTable, d: CardsData, act: CardsActions): R
               )
             })}
             {Input && (
-              // TEMP width probe: Input has no width of its own and a 100%-wide row Box did not stretch
-              // Desktop's native field; three other wrappings, labelled 1–3, to see which one does
-              <Box key={`reply-probe:${last.id}`} flexDirection="column" gap={1}>
-                <Box key={`reply-row1:${last.id}`} flexDirection="column" alignItems="stretch" width="100%">
-                  <Input key={`reply:${last.id}`} label="1" value="" placeholder="回覆…" submitLabel="↵" onSubmit={v => act.event(`1 回覆「${v}」接在「${last.title}」下（原型不會送出）`)} />
-                </Box>
-                <Box key={`reply-row2:${last.id}`} flexDirection="row" width="100%">
-                  <Box flexGrow={1} flexDirection="column" alignItems="stretch">
-                    <Input key={`reply2:${last.id}`} label="2" value="" placeholder="回覆…" submitLabel="↵" onSubmit={v => act.event(`2「${v}」`)} />
-                  </Box>
-                </Box>
-                <Input key={`reply3:${last.id}`} label="3" value="" placeholder={'回覆…' + '　'.repeat(60)} submitLabel="↵" onSubmit={v => act.event(`3「${v}」`)} />
-              </Box>
+              // Desktop draws its native field at a fixed width whatever wraps it (PROBE.md〇之六); ↵ is Enter's label
+              <Input key={`reply:${last.id}`} value="" placeholder="回覆…" submitLabel="↵" onSubmit={v => act.event(`回覆「${v}」接在「${last.title}」下（原型不會送出）`)} />
             )}
             {following && <Button key={`unfollow:${id}`} plain dimColor label="結束追問" onPress={() => act.event('結束追問（原型）')} />}
           </Box>

@@ -107,12 +107,13 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 | Button 裡放 Text children | ✗ 引擎 2.1.293 拒絕整個 pane：「takes one string child, its label, or none」。型別檔的 ButtonProps 範例寫可以 |
 | `Link` 的 `file:` 連結 | ✗ Desktop 畫成純文字：「its href is not https: (or http://localhost)」 |
 | `Code format="diff"` | ✗ 只有 `@@` hunk 時畫成一般程式碼：「its source not a unified diff: no patch for hunk at line 1」；要有 `---` / `+++` 檔頭（已補上，待確認） |
-| Button 的 label 含換行 | 測試工具接受；Desktop 上會不會照換行畫，待確認 |
+| Button 的 label 含換行 | ✗ Desktop 不換行：整串畫成一行，超出卡片的部分被切掉（測試工具接受，不會報錯） |
+| Input 的寬度 | ✗ Desktop 的原生輸入框是固定寬度（約 pane 的三分之一）：外面包 100% 寬的 Box、直排加 stretch、flexGrow、加長 placeholder，四種都沒撐開。`submitLabel="↵"` 會畫成輸入框右邊的一顆按鈕 |
 | Box 的 `onPress` | 沒有這個 prop：只有 Button 能按，所以「整張卡片可以按」只能把卡片內容做成一顆 Button 的 label |
 
 **卡片設計的決定（你看過 A / B 兩案後）**
 
-- 一個主題一張卡（root 加上它所有的追問）。收合時整張卡片可以按（標題、時間、則數、一句摘要都在同一顆 Button 的 label 裡）。
+- 一個主題一張卡（root 加上它所有的追問）。收合時只有一行：標題、時間、則數，同一顆 Button（10/13 你看過後：不顯示回答摘要；label 也不能換行）。
 - 不寫「Q」「A」：問題畫成 Desktop prompt 那樣的泡泡（靠右、圓角邊框、淡灰背景），答案直接接在下面。泡泡的顏色是半透明灰（`#8080801f` 背景、`#80808040` 邊框），深色與淺色主題都看得出來；終端機沒有背景色，只畫淡邊框。
 - 展開後看不出層級：照時間由上往下讀成一段對話。某則有多個追問時，答案下面列出各追問的標題（● 目前這條、○ 其他），點了就換成那一條往下讀。最下面是回覆框，接在目前讀到的最後一則下面。
 - 顏色：本 session 正在追問的那張卡是綠色邊框，其他都是一般的灰色邊框，展開中也不另外上色。
