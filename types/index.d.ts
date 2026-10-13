@@ -121,6 +121,8 @@ declare module 'claude-code' {
       selectedId: string | null
       /** The question the pane is rewriting in place (✎), if any. */
       editingId: string | null
+      /** Bumped when the digest or the project context changes in the store, so the pane draws again. */
+      contextRev: number
       /** Unread sidebar answers since the pane was last opened (badge count). */
       unread: number
       /** "只看本 session" filter. */

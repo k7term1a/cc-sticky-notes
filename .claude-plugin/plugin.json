@@ -84,6 +84,12 @@
       "default": 2000000,
       "description": "Pause OpenAI calls past this many tokens per UTC day"
     },
+    "digestEvery": {
+      "type": "number",
+      "title": "Digest every N turns",
+      "default": 3,
+      "description": "Every this many main turns, the summary layer rewrites this session's main-line digest (what Jev reads) and adds new project facts, in the background; 0 turns it off. Also /sn every <n>."
+    },
     "autoOpenPane": {
       "type": "boolean",
       "title": "Auto-open pane",

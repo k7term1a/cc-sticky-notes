@@ -3,6 +3,7 @@
 // counting land in M4 (PLAN.md). Without OPENAI_API_KEY it reports unavailable.
 import type { HttpInit, HttpResponse } from 'claude-code'
 
+import { redact } from '../redact'
 import type { SummaryInput, SummaryJob, SummaryProvider, SummaryResult } from './types'
 
 export const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -42,7 +43,9 @@ export function openaiProvider(
       }
       const key = await d.key()
       if (!key) return { ok: false, reason: 'unavailable', detail: 'OPENAI_API_KEY unset', provider: 'openai' }
-      // TODO(M4): redact(input) when contextMode === 'redacted'; daily cap; usage store.
+      // TODO(M4): daily cap. Usage is counted where the request leaves (usage.ts).
+      // redacted: project content goes out stripped (redact.ts; not a guarantee, PLAN.md)
+      const prompt = opts.contextMode === 'redacted' && input.hasProjectContent ? redact(input.prompt) : input.prompt
       try {
         const r = await d.fetch(OPENAI_URL, {
           method: 'POST',
@@ -54,7 +57,7 @@ export function openaiProvider(
             ...(opts.reasoningEffort === 'none' ? {} : { reasoning_effort: opts.reasoningEffort }),
             messages: [
               { role: 'system', content: input.system },
-              { role: 'user', content: input.prompt },
+              { role: 'user', content: prompt },
             ],
           }),
         })

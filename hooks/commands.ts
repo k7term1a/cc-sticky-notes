@@ -3,8 +3,9 @@
 // long or private goes to $.ui.log / toast instead and the command returns {}.
 import type { CommandRunResult } from 'claude-code'
 
+import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
-import { change, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { change, digestNow, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -12,8 +13,8 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | feedback | calibrate | doctor | promote | outline | refresh | digest | export | mode | stats',
-  argumentHint: '[new <問題> | back | feedback main|new|followup|good | calibrate]',
+  description: 'Sticky Notes: open/close the pane, or new | back | provider | every | ctx | feedback | calibrate | doctor',
+  argumentHint: '[new <問題> | back | provider claude|openai | every <n> | ctx [add <文字> | rm <n> | refresh] | feedback … | calibrate]',
 }
 
 const CHOICE_NAME = { main: '主線', new: '新的便利貼', followup: '追問' } as const
@@ -29,7 +30,7 @@ export const SHORT_COMMAND = 'sn'
 export const SHORT_COMMAND_SPEC = {
   name: SHORT_COMMAND,
   description: 'Sticky Notes: open/close the pane (short for /sticky-note)',
-  argumentHint: '[new <問題> | back | …]',
+  argumentHint: '[new <問題> | back | provider claude|openai | every <n> | ctx …]',
 }
 
 const LATER: Record<string, string> = {
@@ -93,6 +94,63 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
     }
     case 'doctor': {
       for (const line of await p.keys.report()) p.ui.log(line)
+      return {}
+    }
+    case 'provider': {
+      // the summary layer: titles, summaries, the main digest (Claude subscription or OpenAI free tier)
+      const v = rest.toLowerCase()
+      if (v === '') return { text: `統整層目前用 ${opts.summaryProvider === 'openai' ? 'OpenAI' : 'Claude'}。切換：/sn provider claude 或 /sn provider openai` }
+      if (v !== 'claude' && v !== 'openai') return { text: '用法：/sn provider claude|openai' }
+      const r = await p.setOption('summaryProvider', v)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.summaryProvider = v
+      p.ui.toast(`Sticky Notes：統整層改用 ${v === 'claude' ? 'Claude' : 'OpenAI'}`)
+      return {}
+    }
+    case 'every': {
+      // R4: the main-line digest and the project context every n main turns; 0 turns them off
+      if (rest === '') return { text: `目前${opts.digestEvery > 0 ? `每 ${opts.digestEvery} 回合背景統整一次` : '不做背景統整'}。調整：/sn every <回合數>（0 = 關閉）` }
+      const n = Number(rest)
+      if (!Number.isInteger(n) || n < 0 || n > 100) return { text: '用法：/sn every <0–100 的整數>（0 = 關閉）' }
+      const r = await p.setOption('digestEvery', n)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.digestEvery = n
+      p.ui.toast(n > 0 ? `Sticky Notes：每 ${n} 回合背景統整一次` : 'Sticky Notes：背景統整已關閉')
+      return {}
+    }
+    case 'ctx': {
+      // R4: the project context (only ever added to by the summary layer) and this session's digest
+      const root = await projectKey(p)
+      const [verb = '', ...words] = rest.split(/\s+/)
+      const arg = words.join(' ').trim()
+      const facts = await readFacts(p.store, root)
+      if (verb === 'add') {
+        if (arg === '') return { text: '用法：/sn ctx add <一條專案脈絡>' }
+        const fact = { id: crypto.randomUUID(), text: [...arg].slice(0, 200).join(''), at: await p.now(), sessionId: await p.sessionId(), source: 'manual' as const }
+        await p.store.set(contextKey(root), addFacts(facts, [fact]))
+        await p.state.contextChanged()
+        p.ui.toast('Sticky Notes：已加入專案脈絡')
+        return {}
+      }
+      if (verb === 'rm') {
+        const i = Number(arg) - 1
+        if (!Number.isInteger(i) || i < 0 || i >= facts.length) return { text: `用法：/sn ctx rm <1–${facts.length}>` }
+        await p.store.set(contextKey(root), facts.filter((_, k) => k !== i))
+        await p.state.contextChanged()
+        p.ui.toast(`Sticky Notes：已刪除第 ${i + 1} 條`)
+        return {}
+      }
+      if (verb === 'refresh') {
+        p.ui.toast('Sticky Notes：背景統整中…')
+        p.later(() => void digestNow(p, opts, true).then(r => p.ui.toast(`Sticky Notes：${r === 'digest written' || r.startsWith('digest written') ? '統整完成' : `沒有統整（${r}）`}`)))
+        return {}
+      }
+      if (verb !== '') return { text: '用法：/sn ctx [add <文字> | rm <n> | refresh]' }
+      // the list stays out of the transcript (a command's text is a row the model reads)
+      const digest = await readDigest(p.store, root, await p.sessionId())
+      p.ui.log(`主線摘要（這個 session）：${digest?.text ?? '還沒有'}`)
+      if (facts.length === 0) p.ui.log('專案脈絡：還沒有。背景統整會自動加，或用 /sn ctx add <文字>')
+      facts.forEach((f, k) => p.ui.log(`${k + 1}. ${f.text}${f.source === 'manual' ? '（手動）' : ''}`))
       return {}
     }
     case 'calibrate': {

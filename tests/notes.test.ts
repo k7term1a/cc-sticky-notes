@@ -3,7 +3,9 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
-import { explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { addFacts, digestDue, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
+import { runCommand } from '../hooks/commands'
+import { digestNow, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -16,6 +18,9 @@ type Fake = {
   kv: KV
   jevCalls: unknown[]
   openaiCalls: number
+  openaiBodies: string[]
+  contextChanges: () => number
+  options: Record<string, unknown>
   forkPrompts: string[]
   toasts: string[]
   logs: string[]
@@ -49,6 +54,9 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   const answers = Array.isArray(opts.askAnswer) ? [...opts.askAnswer] : null
   let openaiCalls = 0
   let opened = 0
+  let contextChanges = 0
+  const openaiBodies: string[] = []
+  const options: Record<string, unknown> = {}
   let now = 1000
   const state = { lastTurnId: 't0' as string | null, turnsAt: 0, pending: 0, unread: 0, lastSample: null as string | null }
   const messages: SessionMessage[] = [
@@ -62,6 +70,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   const fetch = async (url: string, init?: HttpInit): Promise<HttpResponse> => {
     if (url.includes('openai')) {
       openaiCalls++
+      openaiBodies.push(String(init?.body ?? ''))
       return { status: 200, ok: true, headers: {}, text: JSON.stringify({ choices: [{ message: { content: '{"title":"OA","summary":"x"}' } }], usage: { total_tokens: 9 } }) }
     }
     const body = JSON.parse(String(init?.body ?? '{}'))
@@ -81,7 +90,13 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       forkPrompts.push(prompt)
       return { isAnswered: true, text: `answer #${forkPrompts.length}`, usage }
     },
-    complete: async () => ({ isAnswered: true, text: '{"title":"標題","summary":"一。二。三。"}', usage }),
+    // the digest's own system prompt asks for {"digest", "facts"}; every other job for a title
+    complete: async req => ({
+      isAnswered: true,
+      text: String(req.system ?? '').includes('"digest"') ? '{"digest":"主線在把 auth 改成 session cookie。","facts":["我們用 session cookie，不用 JWT"]}' : '{"title":"標題","summary":"一。二。三。"}',
+      usage,
+    }),
+    setOption: async (field, value) => ((options[field] = value), { ok: true }),
     keys: { typesafe: async () => opts.typesafeKey, openai: async () => opts.openaiKey, report: async () => [] },
     ui: {
       log: t => void logs.push(t),
@@ -110,6 +125,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       lastSampleId: async () => state.lastSample,
       setLastSampleId: async id => void (state.lastSample = id),
       setSelected: async () => {},
+      contextChanged: async () => void contextChanges++,
     },
   }
   return {
@@ -119,6 +135,9 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     get openaiCalls() {
       return openaiCalls
     },
+    openaiBodies,
+    contextChanges: () => contextChanges,
+    options,
     forkPrompts,
     toasts,
     logs,
@@ -336,6 +355,97 @@ describe('notes end to end (stubbed fork and complete)', () => {
     const t = await f.tree()
     expect(t.nodes[b]?.parentId).toBeNull()
     expect(t.activeThread).toEqual({ S1: a, S2: b })
+  })
+})
+
+describe('R4: the main-line digest and the project context', () => {
+  test('due every digestEvery turns; 0 turns it off', () => {
+    expect(digestDue(3, 3, null)).toBe(true)
+    expect(digestDue(3, 2, null)).toBe(false)
+    expect(digestDue(3, 5, { text: 'x', turns: 3, at: 0 })).toBe(false)
+    expect(digestDue(3, 6, { text: 'x', turns: 3, at: 0 })).toBe(true)
+    expect(digestDue(0, 99, null)).toBe(false)
+    expect(readOptions({}).digestEvery).toBe(3)
+  })
+
+  test('digestNow: forced, then not due until digestEvery more turns', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('main_task', 0.9) })
+    expect(await digestNow(f.ports, opts, true)).toBe('digest written, 1 new fact(s)')
+    expect(await digestNow(f.ports, opts)).toBe('not due')
+    expect(await readDigest(f.kv, ROOT, 'S1')).toMatchObject({ text: '主線在把 auth 改成 session cookie。', turns: 7 })
+    // the same fact again is not added twice
+    expect(await digestNow(f.ports, opts, true)).toBe('digest written')
+    expect((await readFacts(f.kv, ROOT)).map(x => x.text)).toEqual(['我們用 session cookie，不用 JWT'])
+    expect(f.contextChanges()).toBe(2)
+    // Jev reads the digest and the facts
+    await routePrompt(f.ports, opts, 'fix the login bug')
+    const state = (f.jevCalls.at(-1) as { state: string }).state
+    expect(state).toContain('[main-line digest]\n主線在把 auth 改成 session cookie。')
+    expect(state).toContain('- 我們用 session cookie，不用 JWT')
+  })
+
+  test('the digest reads the last exchanges: each typed prompt with the reply after it', () => {
+    const msgs = [
+      { role: 'user', text: 'u1' },
+      { role: 'assistant', text: 'a1' },
+      { role: 'user', text: '<command-name>/sn</command-name>' },
+      { role: 'user', text: 'u2' },
+      { role: 'assistant', text: '' },
+      { role: 'assistant', text: 'a2' },
+    ]
+    const isTyped = (m: { role: string; text: string }) => m.role === 'user' && !m.text.startsWith('<')
+    expect(lastExchanges(msgs, isTyped)).toEqual([
+      { user: 'u1', assistant: 'a1' },
+      { user: 'u2', assistant: 'a2' },
+    ])
+  })
+
+  test('facts: malformed answers are no digest; over the cap the oldest automatic facts go, hand-added ones stay', () => {
+    expect(parseDigest('nope')).toBeNull()
+    expect(parseDigest('{"digest":"d","facts":["a","b","c","d"]}')).toEqual({ digest: 'd', facts: ['a', 'b', 'c'] })
+    const fact = (i: number, source: 'auto' | 'manual') => ({ id: String(i), text: `f${i}`, at: i, sessionId: 'S', source })
+    const list = [fact(0, 'manual'), ...Array.from({ length: 59 }, (_, i) => fact(i + 1, 'auto'))]
+    const next = addFacts(list, [fact(100, 'auto'), fact(101, 'auto')])
+    expect(next).toHaveLength(60)
+    expect(next[0]!.source).toBe('manual')
+    expect(next.map(x => x.id)).not.toContain('1')
+    expect(next.at(-1)!.id).toBe('101')
+  })
+
+  test('/sn every and /sn provider write the plugin setting and take effect at once', async () => {
+    const f = fake()
+    const o = readOptions({})
+    await runCommand(f.ports, o, 'every 5')
+    expect(f.options.digestEvery).toBe(5)
+    expect(o.digestEvery).toBe(5)
+    expect(await runCommand(f.ports, o, 'every -1')).toMatchObject({ text: expect.stringContaining('用法') })
+    await runCommand(f.ports, o, 'provider openai')
+    expect(f.options.summaryProvider).toBe('openai')
+    expect(o.summaryProvider).toBe('openai')
+    expect(await runCommand(f.ports, o, 'provider')).toMatchObject({ text: expect.stringContaining('OpenAI') })
+  })
+
+  test('/sn ctx add and rm edit the project context', async () => {
+    const f = fake()
+    await runCommand(f.ports, opts, 'ctx add 部署前要先跑 migration')
+    await runCommand(f.ports, opts, 'ctx add 測試用 bun')
+    expect((await readFacts(f.kv, ROOT)).map(x => [x.text, x.source])).toEqual([
+      ['部署前要先跑 migration', 'manual'],
+      ['測試用 bun', 'manual'],
+    ])
+    await runCommand(f.ports, opts, 'ctx rm 1')
+    expect((await readFacts(f.kv, ROOT)).map(x => x.text)).toEqual(['測試用 bun'])
+    expect(await runCommand(f.ports, opts, 'ctx rm 9')).toMatchObject({ text: expect.stringContaining('用法') })
+  })
+
+  test('OpenAI with openaiContextMode=redacted gets the digest input stripped', async () => {
+    const f = fake({ openaiKey: 'k' })
+    const o = { ...readOptions({ summaryProvider: 'openai' }) }
+    await summaryProvider(f.ports, o).summarize('main-digest', { system: 's', prompt: '看 src/auth/session.ts\n```ts\nconst SECRET = 1\n```', maxTokens: 10, hasProjectContent: true })
+    const body = f.openaiBodies.at(-1)!
+    expect(body).not.toContain('src/auth/session.ts')
+    expect(body).not.toContain('const SECRET')
+    expect(body).toContain('[redacted]')
   })
 })
 

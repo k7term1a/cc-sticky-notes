@@ -24,6 +24,8 @@ import { pathTo, rootOf } from './tree'
 
 export const PANE_ID = 'sticky'
 export const PANE_TITLE = 'Sticky Notes'
+/** The selection that opens the project-context card (R4) instead of a topic. */
+export const CONTEXT_CARD = '__context__'
 
 /** P9: an answer that did not come from the fork had no project context. */
 export function contextMark(n: TreeNode): string {
@@ -96,6 +98,11 @@ export type PaneData = {
   sessionId: string
   pending: number
   surface: RenderSurface
+  /** R4: this session's main-line digest, the project facts, and how they are kept. */
+  digest: string | null
+  facts: readonly { id: string; text: string; source: 'auto' | 'manual' }[]
+  digestEvery: number
+  provider: 'claude' | 'openai'
 }
 
 export type PaneActions = {
@@ -109,6 +116,10 @@ export type PaneActions = {
   rewrite(nodeId: string, question: string): void
   /** 結束追問: this session follows up no note any more. */
   unfollow(): void
+  /** R4: the project context card's own edits, and a digest run now. */
+  addFact(text: string): void
+  removeFact(id: string): void
+  refreshDigest(): void
 }
 
 /**
@@ -153,6 +164,59 @@ function editor(els: ElementTable, node: TreeNode, act: PaneActions): RenderElem
         }}
       />
       <Button key={`edit-cancel:${node.id}`} plain dimColor label="取消" onPress={() => act.edit(null)} />
+    </Box>
+  )
+}
+
+/**
+ * R4: the project context card, last in the pane. Closed, one line; open, this session's
+ * main-line digest, the facts (✕ deletes one), a box to add one, and a run now.
+ */
+function contextCard(els: ElementTable, d: PaneData, act: PaneActions): RenderElement {
+  const { Box, Text, Button } = els
+  const Input = 'Input' in els ? els.Input : undefined
+  const open = d.selectedId === CONTEXT_CARD
+  const label = `專案脈絡　${d.facts.length} 條`
+  if (!open) {
+    return (
+      <Box key="card:context" borderStyle="round" borderDimColor paddingX={1}>
+        <Button key="open:context" plain dimColor label={label} onPress={() => act.select(CONTEXT_CARD)} />
+      </Box>
+    )
+  }
+  const how = d.digestEvery > 0 ? `每 ${d.digestEvery} 回合背景統整 · ${d.provider === 'openai' ? 'OpenAI' : 'Claude'}` : '背景統整已關閉（/sn every <n>）'
+  return (
+    <Box key="card:context" flexDirection="column" borderStyle="round" borderDimColor paddingX={1} gap={1}>
+      <Box justifyContent="space-between">
+        <Button key="close:context" plain label="專案脈絡" onPress={() => act.select(null)} />
+        <Text dimColor>{how}</Text>
+      </Box>
+      <Box flexDirection="column">
+        <Text dimColor>主線摘要（這個 session）</Text>
+        <Text>{d.digest ?? '還沒有：主線跑過幾個回合後會出現。'}</Text>
+      </Box>
+      <Box flexDirection="column">
+        <Text dimColor>專案脈絡（所有 session 共用；Jev 會看最新幾條）</Text>
+        {d.facts.length === 0 && <Text dimColor>還沒有。背景統整會自動加，也可以在下面自己加。</Text>}
+        {d.facts.map((f, i) => (
+          <Box key={`fact:${f.id}`} flexDirection="row" columnGap={1}>
+            <Text>{`${i + 1}. ${clip(f.text, 200)}${f.source === 'manual' ? '（手動）' : ''}`}</Text>
+            <Button key={`fact-rm:${f.id}`} plain dimColor label="✕" onPress={() => act.removeFact(f.id)} />
+          </Box>
+        ))}
+      </Box>
+      {Input && (
+        <Input
+          key={`fact-add:${d.facts.length}`}
+          value=""
+          placeholder="加一條專案脈絡…"
+          submitLabel="↵"
+          onSubmit={v => {
+            if (v.trim() !== '') act.addFact(v.trim())
+          }}
+        />
+      )}
+      <Button key="digest-now" plain dimColor label="立即統整" onPress={() => act.refreshDigest()} />
     </Box>
   )
 }
@@ -258,6 +322,8 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
             </Box>
           )
         })}
+
+      {contextCard(els, d, act)}
     </Box>
   )
 }

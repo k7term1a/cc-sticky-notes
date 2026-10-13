@@ -96,6 +96,15 @@ OPENAI_API_KEY=sk-...
 - **回覆框**：卡片最下面，接在目前讀到的最後一則下面。Desktop 的輸入框寬度固定，mod 改不了。
 - **綠色邊框**：這個 session 正在追問的那張；裡面有「結束追問」。其他卡片都是灰框。只是點開來看不會變成追問中。
 
+### 主線摘要與專案脈絡
+
+每 3 個主線回合（`/sn every` 可調），mod 會在背景請統整層（Claude haiku 或 OpenAI）讀最近幾輪對話，寫兩樣東西：
+
+- **主線摘要**：這個 session 現在在做什麼、剛決定什麼、還卡在哪，200 字內。Jev 判斷新的一句要不要跳對話框、接在哪張時會讀它，比原本只看幾句原文準。
+- **專案脈絡**：值得長期記住的事（決定、慣例、限制、踩過的坑），每次 0–3 條，所有 session 共用，只會自動增加。
+
+兩者都在 pane 最下面的「專案脈絡」卡片：可以看、用 ✕ 刪、自己加一條，或按「立即統整」。用 OpenAI 時，送出去的對話會先依 `openaiContextMode` 剝掉程式碼、路徑等內容。每次統整大約 2–4k token，會算進狀態列的今日用量。
+
 ### 指令
 
 `/sn` 和 `/sticky-note` 完全一樣，`/sn` 比較好打。
@@ -108,6 +117,11 @@ OPENAI_API_KEY=sk-...
 | `/sn feedback main\|new\|followup` | 上一句其實應該是：主線 / 新的便利貼 / 追問（也可以打「主線」「便利貼」「追問」） |
 | `/sn feedback good` | 上一句現在這樣就對 |
 | `/sn calibrate` | 用你的選擇與回饋，看各門檻下 Jev 的表現 |
+| `/sn provider claude\|openai` | 切換標題、摘要、背景統整用誰寫（不帶參數就顯示目前用哪個） |
+| `/sn every <n>` | 每 n 個主線回合在背景統整一次主線摘要與專案脈絡；`0` 關閉（預設 3） |
+| `/sn ctx` | 在對話裡列出這個 session 的主線摘要和專案脈絡（只有你看得到，Claude 讀不到） |
+| `/sn ctx add <文字>`、`/sn ctx rm <n>` | 自己加一條、刪第 n 條專案脈絡 |
+| `/sn ctx refresh` | 現在就統整一次 |
 | `/sn doctor` | 檢查兩把金鑰找到沒有、從哪裡找到 |
 
 ### 幫忙測試
@@ -123,7 +137,8 @@ OPENAI_API_KEY=sk-...
 | `autoOpenPane` | `true` | 答案回來時自動打開 pane 並選中 |
 | `routeThreshold` | `0.6` | Jev 判成專案任務、且信心至少這麼高時才不問你 |
 | `followupThreshold` | `0.6` | 對話框裡〔接在…下〕排第一的門檻 |
-| `summaryProvider` | `claude` | 標題 / 摘要用誰寫：`claude` 或 `openai` |
+| `summaryProvider` | `claude` | 標題、摘要、背景統整用誰寫：`claude` 或 `openai`（也可以用 `/sn provider`） |
+| `digestEvery` | `3` | 每幾個主線回合在背景統整一次；`0` 關閉（也可以用 `/sn every`） |
 | `claudeModel` / `claudeEffort` | `haiku` / `low` | 寫標題摘要的 Claude 模型與 effort（旁答本身一律用主線的模型） |
 | `openaiModel` / `openaiReasoningEffort` | `gpt-5-mini` / `minimal` | `summaryProvider = openai` 時用 |
 

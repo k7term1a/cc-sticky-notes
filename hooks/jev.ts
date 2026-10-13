@@ -32,6 +32,10 @@ export type JevVerdict = {
 export type Candidate = { key: string; title: string; question: string }
 
 export type JevInput = {
+  /** R4: the summary layer's digest of this session's main line; null before the first one. */
+  digest: string | null
+  /** R4: the newest project facts (context.ts), short. */
+  facts: string[]
   /** Last user prompts (oldest first) and the last assistant reply, raw. */
   recentUser: string[]
   lastAssistant: string | null
@@ -50,11 +54,16 @@ export const PROMPT_CLIP = 1500
 
 const clip = (s: string, n = CLIP) => ([...s].length > n ? [...s].slice(0, n).join('') + '…' : s)
 
-/** The `state` text, as PLAN.md「Jev 分類設計」lays it out. */
+/** The last `n` characters, … before them: a reply's conclusion is at its end. */
+const tail = (s: string, n = CLIP) => ([...s].length > n ? '…' + [...s].slice(-n).join('') : s)
+
+/** The `state` text, as PLAN.md「Jev 分類設計」lays it out (R4: the digest and the project facts first). */
 export function buildState(input: JevInput): string {
   const recent = [...input.recentUser.slice(-3).map(u => `user: ${clip(u)}`)]
-  if (input.lastAssistant !== null) recent.push(`assistant: ${clip(input.lastAssistant)}`)
+  if (input.lastAssistant !== null) recent.push(`assistant: ${tail(input.lastAssistant)}`)
   return [
+    ...(input.digest !== null ? ['[main-line digest]', input.digest, ''] : []),
+    ...(input.facts.length > 0 ? ['[project facts]', ...input.facts.map(f => `- ${clip(f, 100)}`), ''] : []),
     '[recent main-line context]',
     recent.length ? recent.join('\n') : '(none)',
     '',

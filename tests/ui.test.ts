@@ -164,3 +164,27 @@ test('a pasted 12,000-character question and a 15,000-character answer still dra
     await pane.unmount()
   }
 })
+
+test('R4: the project context card shows the digest and edits the facts', async ($, on) => {
+  mock.store(on, {
+    [`digest:${ROOT}:S1`]: { text: '主線在把 auth 改成 session cookie。', turns: 3, at: 1 },
+    [`context:${ROOT}`]: [{ id: 'f1', text: '我們用 session cookie，不用 JWT', at: 1, sessionId: 'S1', source: 'auto' }],
+  })
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.repo', () => ({ value: null }))
+  on('command.register', () => ({ value: { command: 'sticky-note' } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await pane.find({ type: 'Button', text: /專案脈絡　1 條/ } as never)).toBeDefined()
+  await pane.press({ key: 'open:context' })
+  expect(await pane.find({ type: 'Text', text: /^主線在把 auth 改成 session cookie。$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /每 3 回合背景統整 · Claude/ })).toBeDefined()
+  await pane.input({ key: 'fact-add:1', text: '部署前先跑 migration' })
+  expect(await pane.find({ type: 'Text', text: /^2\. 部署前先跑 migration（手動）$/ })).toBeDefined()
+  await pane.press({ key: 'fact-rm:f1' })
+  expect(await pane.find({ type: 'Text', text: /^1\. 部署前先跑 migration（手動）$/ })).toBeDefined()
+  await pane.unmount()
+})

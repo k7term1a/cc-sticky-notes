@@ -5,6 +5,7 @@ import type { ModelEffort, PluginOptions } from 'claude-code'
 
 import type { AskChoice, FeedbackRecord, Tree, TreeNode } from '../types'
 import { answerSide } from './answer'
+import { digestDue, FACTS_FOR_JEV, lastExchanges, readDigest, readFacts, runDigest } from './context'
 import { titleAndSummary } from './digest'
 import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
@@ -25,6 +26,8 @@ export type Options = {
   openaiReasoningEffort: OpenAIReasoningEffort
   openaiContextMode: 'off' | 'redacted' | 'full'
   autoOpenPane: boolean
+  /** R4: the main-line digest and the project context every this many main turns; 0 turns them off. */
+  digestEvery: number
 }
 
 export function readOptions(o: PluginOptions): Options {
@@ -40,6 +43,7 @@ export function readOptions(o: PluginOptions): Options {
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
     autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
+    digestEvery: Math.max(0, Math.floor(num(o.digestEvery, 3))), // every 3 turns (the developer's pick, 10/14)
   }
 }
 
@@ -160,7 +164,10 @@ export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: 
   const node = active ? tree.nodes[active] : undefined
   const turns = await p.turns()
   const at = await p.state.turnsAtLastSidebar()
+  const root = await projectKey(p)
   return {
+    digest: (await readDigest(p.store, root, sessionId))?.text ?? null,
+    facts: (await readFacts(p.store, root)).slice(-FACTS_FOR_JEV).map(f => f.text),
     recentUser: list.filter(isTypedPrompt).map(m => m.text).slice(-3),
     lastAssistant: list.filter(m => m.role === 'assistant' && m.text !== '').at(-1)?.text ?? null,
     activeTitle: node?.title ?? null,
@@ -266,6 +273,27 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string, via: 
     // dismissed, or headless (-p): never swallow the user's input
     return { decision: { kind: 'main' }, verdict, ...none, asked: true }
   }
+}
+
+/**
+ * R4: one digest run for this session (context.ts), through the summary provider.
+ * `force` runs it whatever digestEvery says (/sn ctx refresh).
+ */
+export async function digestNow(p: Ports, opts: Options, force = false): Promise<string> {
+  const root = await projectKey(p)
+  const sessionId = await p.sessionId()
+  const turns = await p.turns()
+  if (!force && !digestDue(opts.digestEvery, turns, await readDigest(p.store, root, sessionId))) return 'not due'
+  const r = await runDigest(
+    { kv: p.store, provider: summaryProvider(p, opts), root, sessionId, turns, now: await p.now(), newId: () => crypto.randomUUID() },
+    lastExchanges(await p.messages(), isTypedPrompt),
+  )
+  if (!r.ok) {
+    p.ui.log(`sticky-notes: main digest skipped (${r.reason})`, 'debug')
+    return r.reason
+  }
+  await p.state.contextChanged()
+  return r.added > 0 ? `digest written, ${r.added} new fact(s)` : 'digest written'
 }
 
 /** What a routed prompt became, in the record's words. */
