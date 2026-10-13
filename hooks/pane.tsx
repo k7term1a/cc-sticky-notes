@@ -31,15 +31,6 @@ export function activeTitle(tree: Tree | null, sessionId: string): string | null
   return id === null ? null : (tree?.nodes[id]?.title ?? null)
 }
 
-/**
- * The status line under the prompt (the developer's pick of the sites, no emoji):
- * "cc-sticky-note <the question this session follows up>", plain "cc-sticky-note"
- * when it follows none, "（回答中）" while answers are pending.
- */
-export function statusLine(tree: Tree | null, sessionId: string, pending: number): string {
-  const following = activeTitle(tree, sessionId)
-  return (following === null ? 'cc-sticky-note' : `cc-sticky-note ${following}`) + (pending > 0 ? '（回答中）' : '')
-}
 
 /** P9: an answer that did not come from the fork had no project context. */
 export function contextMark(n: TreeNode): string {
@@ -66,6 +57,25 @@ export function metaLine(n: TreeNode, depth: number): string {
 const clip = (s: string, n: number) => {
   const cps = [...s.replace(/\s+/g, ' ').trim()]
   return cps.length > n ? cps.slice(0, n).join('') + '…' : cps.join('')
+}
+
+/**
+ * A Text or Markdown holds at most 10000 characters, or the whole pane is refused
+ * and the engine draws its own (seen with an 11,810-character pasted question).
+ */
+export const QUESTION_SHOWN = 300
+export const ANSWER_SHOWN = 9000
+
+/** The question as the card shows it: one line, its first 300 characters, and the full length when cut. */
+export function shownQuestion(q: string): string {
+  const n = [...q].length
+  return n > QUESTION_SHOWN ? `${clip(q, QUESTION_SHOWN)}（共 ${n} 字）` : clip(q, QUESTION_SHOWN)
+}
+
+/** The answer as the card shows it: whole up to 9000 characters, newlines kept. */
+export function shownAnswer(a: string): string {
+  const cps = [...a]
+  return cps.length > ANSWER_SHOWN ? `${cps.slice(0, ANSWER_SHOWN).join('')}\n\n_（答案共 ${cps.length} 字，只顯示前 ${ANSWER_SHOWN} 字）_` : a
 }
 
 export type PaneData = { tree: Tree | null; selectedId: string | null; sessionId: string; pending: number }
@@ -130,13 +140,16 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
               {step.title} — {clip(step.summary ?? step.answer, 90)}
             </Text>
           ))}
-          <Text bold>Q {selected.question}</Text>
+          <Text bold>Q {shownQuestion(selected.question)}</Text>
           <Markdown
-            text={selected.answer !== '' ? selected.answer : selected.promotedAt !== null ? '_這題在主線回答。_' : '_回答中…_'}
+            text={selected.answer !== '' ? shownAnswer(selected.answer) : selected.promotedAt !== null ? '_這題在主線回答。_' : '_回答中…_'}
           />
           {Input && (
+            // keyed by the note: a sent follow-up selects its new note, so the box is a fresh, empty one
+            // (a field keeps what was typed until the hook draws another)
             <Input
-              key="followup"
+              key={`followup:${selected.id}`}
+              value=""
               placeholder="追問這一則…"
               submitLabel="送出"
               onSubmit={value => {

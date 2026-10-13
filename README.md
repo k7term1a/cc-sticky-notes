@@ -2,7 +2,15 @@
 
 一個 Claude Code mod：在專案 session 裡隨口問的「為什麼 / 這是什麼」不會進主線對話，而是變成「便利貼」，在背景回答、顯示在右側 pane，並存成一棵同專案所有 session 共用的樹。主線的 context 保持乾淨，追問也能一路掛在同一條旁支下。
 
-版本 0.0.1，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)。
+版本 0.0.2，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)；之後可能做的需求：[REQUESTS.md](REQUESTS.md)。
+
+**0.0.2 新的地方**
+
+- 對話框的〔接在「…」下〕改成 Jev 判斷最相關的那張便利貼（從最近 8 張裡挑），不再只能接目前追問的那張；多一個〔接在其他便利貼下…〕可以自己挑；在「其他」打標題的關鍵字也能找到便利貼。
+- 從另一台電腦或手機（Remote Control）打字不會跳便利貼的對話框，一律進主線。
+- Jev 判成「專案問題」的句子只進主線，不再在 pane 留下「在主線回答」的便利貼。
+- pane 的追問框送出後會清空。
+- 輸入框下方的狀態列改成顯示這個 mod 今天用掉的額度（Jev 次數、Claude / OpenAI token）。
 
 ## 需求
 
@@ -54,25 +62,29 @@ OPENAI_API_KEY=sk-...
 
 ### 直接在輸入框問
 
-像平常一樣打字。Jev 判斷這句是「專案任務」還是「知識旁問」：
+像平常一樣打字。Jev 只決定「要不要問你」，**不會自己把你的話收成便利貼**：
 
-- **專案任務**：照常送給 Claude，什麼都不會變。
-- **知識旁問**（例如「CRDT 是什麼？」）：這句不會進主線。畫面上出現一張卡片：
+- **有把握的專案任務**：照常送給 Claude，什麼都不會跳出來。
+- **知識旁問**（例如「CRDT 是什麼？」），或 **Jev 沒把握的句子**（信心低於 60%）：跳出一個對話框，問題會帶 Jev 的判斷與信心，例如「這句要怎麼處理？(Jev：知識旁問 96%)」：
+  - 〔開新的便利貼〕：這句不會進主線，畫面上出現一張卡片：
 
-  ```
-  A hook blocked your prompt
-  Prompt dropped by a hook: cc-sticky-note：Jev 96% 判斷是旁支 → 便利貼「CRDT 是什麼？」
-  ```
+    ```
+    A hook blocked your prompt
+    Prompt dropped by a hook: cc-sticky-note：新的便利貼「CRDT 是什麼？」
+    ```
 
-  幾秒後答案出現在右側 pane（會自動打開），對話裡留一行灰字預覽。灰字和卡片 Claude 都讀不到。
-- **Jev 不太確定時**（信心低於 60%）：跳出「這句要進主線還是旁支？(32%)」，你選。
-- **專案相關的疑問**（「為什麼我們這裡用 X？」）：照常問 Claude，並在樹上留一個書籤。
+    幾秒後答案出現在右側 pane（會自動打開），對話裡留一行灰字預覽。灰字和卡片 Claude 都讀不到。
+  - 〔接在「<正在追問的題目>」下〕：只有在你正在追問某一則時才會出現，Jev 覺得是同一個話題時會排在第一個。
+  - 〔送進主線〕：照常送給 Claude。關掉對話框也一樣送進主線，不會吞掉你的話。
+- **專案相關的疑問**（「為什麼我們這裡用 X？」）：照常問 Claude，不會建便利貼。
+
+從另一台電腦用 Remote Control 打字不會跳便利貼的對話框，本來會問的句子一律進主線；便利貼、狀態列和 pane 只在跑 session 的那台電腦上用。
 
 ### 追問
 
-問完一則之後，輸入框下方會顯示 `cc-sticky-note <正在追問的題目>`。這時在輸入框直接打字，Jev 會判斷是不是在延續這個話題；是的話就掛在同一條旁支下。想結束追問，按 pane 裡的「回到主線」或打 `/sn back`。
+輸入框下方右側的狀態列顯示這個 mod 今天用掉的額度，例如 `cc-sticky-notes  今日 Jev 12 次 · Claude 35k`（用過 OpenAI 才會出現 OpenAI；Claude 的數字不含讀 cache 的部分；所有專案、所有 session 合計，每天歸零）。接著再問相關的問題，對話框會把 Jev 判斷最相關的那張便利貼放在〔接在「…」下〕，選它就掛在那張下面；不是那張的話選〔接在其他便利貼下…〕，或在「其他」打標題的關鍵字。想結束追問，按 pane 裡的「回到主線」或打 `/sn back`。
 
-也可以在 pane 裡點任何一則便利貼，接著打字就是追問它；或用 pane 卡片裡的追問框（不經 Jev，直接掛在那一則下面）。
+也可以在 pane 裡點任何一則便利貼，接著打字就會提供〔接在「那一則」下〕；或用 pane 卡片裡的追問框（不經 Jev，直接掛在那一則下面）。
 
 ### 右側 pane
 
@@ -90,14 +102,14 @@ OPENAI_API_KEY=sk-...
 | `/sn` | 開 / 關右側 pane |
 | `/sn new <問題>` | 手動開一張便利貼（不經 Jev） |
 | `/sn back` | 結束追問，回到主線 |
-| `/sn feedback good` | 剛剛那句 Jev 分對了 |
-| `/sn feedback bad <main\|sidebar\|followup\|project>` | 分錯了，正確應該是哪一種（也可以打「錯 主線」） |
-| `/sn calibrate` | 用你標記過的資料，看各門檻下 Jev 的準確率 |
+| `/sn feedback main\|new\|followup` | 上一句其實應該是：主線 / 新的便利貼 / 追問（也可以打「主線」「便利貼」「追問」） |
+| `/sn feedback good` | 上一句現在這樣就對 |
+| `/sn calibrate` | 用你的選擇與回饋，看各門檻下 Jev 的表現 |
 | `/sn doctor` | 檢查兩把金鑰找到沒有、從哪裡找到 |
 
 ### 幫忙測試
 
-最有用的回饋是 **Jev 分錯的時候**：被攔成便利貼的其實是任務，或任務被當成旁問。打 `/sn feedback bad main`（或 `sidebar` 等），再截圖給我。
+你在對話框的每一次選擇都會自動記下來（Jev 的判斷、信心、你的選擇，只存在你的電腦）。最有用的額外回饋是 **Jev 沒問、直接送進主線，但其實你想要便利貼** 的時候：打 `/sn feedback new`，再截圖給我。
 
 ### 設定
 
@@ -106,8 +118,8 @@ OPENAI_API_KEY=sk-...
 | 欄位 | 預設 | 說明 |
 | --- | --- | --- |
 | `autoOpenPane` | `true` | 答案回來時自動打開 pane 並選中 |
-| `routeThreshold` | `0.6` | Jev 信心低於這個就問你 |
-| `followupThreshold` | `0.6` | 判成追問的門檻 |
+| `routeThreshold` | `0.6` | Jev 判成專案任務、且信心至少這麼高時才不問你 |
+| `followupThreshold` | `0.6` | 對話框裡〔接在…下〕排第一的門檻 |
 | `summaryProvider` | `claude` | 標題 / 摘要用誰寫：`claude` 或 `openai` |
 | `claudeModel` / `claudeEffort` | `haiku` / `low` | 寫標題摘要的 Claude 模型與 effort（旁答本身一律用主線的模型） |
 | `openaiModel` / `openaiReasoningEffort` | `gpt-5-mini` / `minimal` | `summaryProvider = openai` 時用 |
@@ -140,7 +152,7 @@ npx -p typescript@5.6 tsc -p .
 - `hooks/register.tsx`：所有 hook，以及 `portsOf($)`。只有這個檔碰 `$`（PROBE.md P1）。
 - `hooks/tree.ts`、`route.ts`、`jev.ts`、`redact.ts`、`digest.ts`、`answer.ts`：邏輯模組，純函式或吃 `Ports`。
 - `hooks/notes.ts`：流程（路由 → 便利貼 → 背景回答 → 路由樣本）。
-- `hooks/feedback.ts`：路由樣本、`/sn feedback`、`calibrate`。
+- `hooks/feedback.ts`：路由回饋紀錄（`feedback:<root>:<id>`）、`/sn feedback`、`calibrate`。
 - `hooks/secrets.ts`：金鑰從哪裡來。
 - `hooks/pane.tsx`：右側 pane 與輸入框下方的狀態列。
 - `probes/m0/`：M0 探針 mod（`cc-sticky-probe`），獨立的 plugin。

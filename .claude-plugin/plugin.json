@@ -1,6 +1,6 @@
 {
   "name": "cc-sticky-notes",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "author": {
     "name": "Kai Chi"
   },
@@ -11,13 +11,13 @@
       "type": "number",
       "title": "Route threshold",
       "default": 0.6,
-      "description": "Minimum Jev confidence before asking the user"
+      "description": "A main_task prompt goes to the main line without a dialog only at or above this Jev confidence; everything else asks"
     },
     "followupThreshold": {
       "type": "number",
       "title": "Follow-up threshold",
       "default": 0.6,
-      "description": "Minimum is_followup confidence to attach under the active thread"
+      "description": "is_followup at or above this puts the follow-up option first in the dialog"
     },
     "summaryProvider": {
       "type": "string",

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { buildForkPrompt } from '../hooks/answer'
 import { parseTitleSummary } from '../hooks/digest'
-import { buildRequest, buildState, classify, NEW_TAG, parseResponse, type JevInput } from '../hooks/jev'
+import { buildRequest, buildState, classify, NEW_TAG, NO_NOTE, parseResponse, type JevInput } from '../hooks/jev'
 
 const input = (over: Partial<JevInput> = {}): JevInput => ({
   recentUser: ['u1', 'u2', 'u3', 'u4'],
@@ -12,6 +12,7 @@ const input = (over: Partial<JevInput> = {}): JevInput => ({
   mainTurnsSinceLastSidebar: 3,
   prompt: '為什麼 TCP 要三次握手？',
   tags: [],
+  candidates: [],
   ...over,
 })
 
@@ -31,6 +32,30 @@ describe('jev request', () => {
     expect(none.questions.tag).toBeUndefined()
     const some = buildRequest(input({ tags: ['db'] })) as { questions: { tag: { criteria: Record<string, string> } } }
     expect(Object.keys(some.questions.tag.criteria)).toEqual(['db', NEW_TAG])
+  })
+})
+
+describe('jev continues', () => {
+  test('the continues question lists the recent notes and none, only when there are some', () => {
+    const none = buildRequest(input()) as { questions: Record<string, unknown> }
+    expect(none.questions.continues).toBeUndefined()
+    const some = buildRequest(input({ candidates: [{ key: 'n1', title: 'TCP 背壓', question: 'backpressure 是什麼？' }] })) as {
+      questions: { continues: { criteria: Record<string, string> } }
+    }
+    expect(Object.keys(some.questions.continues.criteria)).toEqual(['n1', NO_NOTE])
+    expect(some.questions.continues.criteria.n1).toContain('TCP 背壓')
+  })
+
+  test('the answer carries the pick and each probability', () => {
+    const v = parseResponse({
+      answers: {
+        route: { type: 'choice', choice: 'sidebar_knowledge', confidence: 0.9 },
+        is_followup: { type: 'noul', noul: 0.1 },
+        needs_project_ctx: { type: 'noul', noul: 0.1 },
+        continues: { type: 'choice', choice: 'n2', confidence: 0.7, probabilities: { n1: 0.2, n2: 0.7, none: 0.1 } },
+      },
+    })
+    expect(v?.continues).toEqual({ label: 'n2', confidence: 0.7, probabilities: { n1: 0.2, n2: 0.7, none: 0.1 } })
   })
 })
 
@@ -88,5 +113,15 @@ describe('summary + fork prompts', () => {
     const p = buildForkPrompt([{ question: 'Q?', answer: 'A.' }], 'Next?')
     expect(p).toContain('Q1: Q?\nA1: A.')
     expect(p.endsWith('[question]\nNext?')).toBe(true)
+  })
+})
+
+describe('jev state stays small', () => {
+  test('a pasted wall of text is cut to 1500 characters, the last question to 300', () => {
+    const s = buildState(input({ prompt: 'x'.repeat(12000), activeTitle: 't', activeLastQuestion: 'y'.repeat(12000) }))
+    expect(s).toContain('x'.repeat(1500) + '…')
+    expect(s).not.toContain('x'.repeat(1501))
+    expect(s).toContain('active_thread_last_question: ' + 'y'.repeat(300) + '…')
+    expect(s.length).toBeLessThan(3000)
   })
 })

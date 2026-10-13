@@ -1,52 +1,43 @@
-// Routing feedback: every routing decision is kept as a sample, the user can say
-// it was right or wrong, and calibrate() shows what each threshold would do.
-// The interface for tuning Jev later (PROBE.md D15); the UI is minimal for now:
-// /sticky-note feedback, the $.ui.ask answer, and (M2) the pane's 重新分類.
+// Routing feedback: every prompt Jev saw is kept with Jev's call, its confidence
+// and the user's choice (the dialog's pick, or /sn feedback afterwards), so the
+// threshold can be tuned later (PROBE.md D15). calibrate() shows what each
+// threshold would do.
 //
-// $.store `route:<root>:<id>`, one key per sample (no shared key to race on),
-// at most SAMPLE_CAP per project. Prompts stay in the local store only.
-import type { RouteChoice, RouteFeedback, RouteSample } from '../types'
+// $.store `feedback:<root>:<id>`, one key per record (no shared key to race on),
+// at most RECORD_CAP per project. Prompts stay in the local store only.
+import type { AskChoice, FeedbackRecord } from '../types'
 import type { JevVerdict } from './jev'
 import type { KV } from './ports'
-import type { Decision } from './route'
 import { normalizeRoot } from './tree'
 
-export const SAMPLE_CAP = 500
+export const RECORD_CAP = 500
 export const PROMPT_KEEP = 200
 
-const prefix = (root: string) => `route:${normalizeRoot(root)}:`
+const prefix = (root: string) => `feedback:${normalizeRoot(root)}:`
 
 /** Time-ordered id: base-36 epoch ms, zero-padded, so key order is time order. */
-export function sampleId(at: number, rand: string): string {
+export function recordId(at: number, rand: string): string {
   return `${at.toString(36).padStart(9, '0')}-${rand.slice(0, 8)}`
 }
 
-export function choiceOf(d: Decision): RouteSample['decision'] {
-  switch (d.kind) {
-    case 'sidebar':
-      return d.attach === 'followup' ? 'followup' : 'sidebar'
-    default:
-      return d.kind
-  }
-}
-
-export function sampleFrom(a: {
+export function makeRecord(a: {
   id: string
   at: number
   sessionId: string
   prompt: string
-  verdict: JevVerdict | null
-  thresholds: RouteSample['thresholds']
-  decision: Decision
+  verdict: JevVerdict
+  thresholds: FeedbackRecord['thresholds']
+  asked: boolean
+  outcome: FeedbackRecord['outcome']
+  choice: AskChoice | null
   nodeId: string | null
-  feedback?: RouteFeedback | null
-}): RouteSample {
+}): FeedbackRecord {
   return {
     id: a.id,
     at: a.at,
     sessionId: a.sessionId,
     prompt: [...a.prompt].slice(0, PROMPT_KEEP).join(''),
-    jev: a.verdict && {
+    jev: {
       route: a.verdict.route.label,
       confidence: a.verdict.route.confidence,
       isFollowup: a.verdict.isFollowup,
@@ -54,89 +45,92 @@ export function sampleFrom(a: {
       tag: a.verdict.tag?.label ?? null,
     },
     thresholds: a.thresholds,
-    decision: choiceOf(a.decision),
+    asked: a.asked,
+    outcome: a.outcome,
+    choice: a.choice,
+    choiceSource: a.choice === null ? null : 'ask',
     nodeId: a.nodeId,
-    feedback: a.feedback ?? null,
   }
 }
 
-/** Stores a sample and drops the oldest beyond the cap. */
-export async function recordSample(store: KV, root: string, sample: RouteSample): Promise<void> {
-  await store.set(prefix(root) + sample.id, sample)
+/** Stores a record and drops the oldest beyond the cap. */
+export async function saveRecord(store: KV, root: string, record: FeedbackRecord): Promise<void> {
+  await store.set(prefix(root) + record.id, record)
   const mine = (await store.keys()).filter(k => k.startsWith(prefix(root))).sort()
-  for (const k of mine.slice(0, Math.max(0, mine.length - SAMPLE_CAP))) await store.delete(k)
+  for (const k of mine.slice(0, Math.max(0, mine.length - RECORD_CAP))) await store.delete(k)
 }
 
-export async function setFeedback(store: KV, root: string, id: string, feedback: RouteFeedback): Promise<RouteSample | null> {
-  const raw = (await store.get(prefix(root) + id)) as RouteSample | undefined
+export async function getRecord(store: KV, root: string, id: string): Promise<FeedbackRecord | null> {
+  return ((await store.get(prefix(root) + id)) as FeedbackRecord | undefined) ?? null
+}
+
+/** /sn feedback: the user's choice for a record, said afterwards. */
+export async function setChoice(store: KV, root: string, id: string, choice: AskChoice): Promise<FeedbackRecord | null> {
+  const raw = (await store.get(prefix(root) + id)) as FeedbackRecord | undefined
   if (!raw) return null
-  const next = { ...raw, feedback }
+  const next: FeedbackRecord = { ...raw, choice, choiceSource: 'command' }
   await store.set(prefix(root) + id, next)
   return next
 }
 
-export async function listSamples(store: KV, root: string): Promise<RouteSample[]> {
-  const out: RouteSample[] = []
+export async function listRecords(store: KV, root: string): Promise<FeedbackRecord[]> {
+  const out: FeedbackRecord[] = []
   for (const k of (await store.keys()).filter(k => k.startsWith(prefix(root))).sort()) {
-    const s = (await store.get(k)) as RouteSample | undefined
-    if (s) out.push(s)
+    const r = (await store.get(k)) as FeedbackRecord | undefined
+    if (r) out.push(r)
   }
   return out
 }
 
-const CHOICES: Record<string, RouteChoice> = {
+const CHOICES: Record<string, AskChoice> = {
   main: 'main',
   主線: 'main',
-  sidebar: 'sidebar',
-  旁支: 'sidebar',
-  note: 'sidebar',
+  project: 'main',
+  new: 'new',
+  sidebar: 'new',
+  note: 'new',
+  旁支: 'new',
+  便利貼: 'new',
   followup: 'followup',
   追問: 'followup',
-  project: 'project_question',
-  project_question: 'project_question',
-  專案: 'project_question',
 }
 
-/** `good` / `bad [main|sidebar|followup|project]` (or 對 / 錯 and the Chinese labels). */
-export function parseFeedback(args: string): { verdict: 'right' | 'wrong'; expected: RouteChoice | null } | null {
-  const [v, e] = args.trim().split(/\s+/)
-  const verdict = v === 'good' || v === '對' ? 'right' : v === 'bad' || v === '錯' ? 'wrong' : null
-  if (verdict === null) return null
-  const expected = e ? (CHOICES[e.toLowerCase()] ?? null) : null
-  if (e && expected === null) return null
-  return { verdict, expected }
+/**
+ * `/sn feedback <main|new|followup>`: what the last prompt should have been.
+ * `good` keeps what happened. Chinese labels work too (主線 / 便利貼 / 追問).
+ */
+export function parseFeedback(args: string): { choice: AskChoice } | { good: true } | null {
+  const word = args.trim().split(/\s+/)[0] ?? ''
+  if (word === 'good' || word === '對') return { good: true }
+  const choice = CHOICES[word.toLowerCase()]
+  return choice ? { choice } : null
 }
 
-/** main / sidebar / project: sidebar and followup are the same route, they differ in attachment. */
-const family = (c: string): 'main' | 'sidebar' | 'project_question' =>
-  c === 'main' || c === 'main_task' ? 'main' : c === 'project_question' ? 'project_question' : 'sidebar'
-
-/** The truth a sample carries, if the user said anything. */
-export function truthOf(s: RouteSample): RouteChoice | null {
-  if (!s.feedback) return null
-  if (s.feedback.expected) return s.feedback.expected
-  if (s.feedback.verdict === 'right' && s.decision !== 'ask') return s.decision
-  return null
-}
+/** Jev's route and the user's choice compared as main line vs. sticky note. */
+const isMain = (x: string) => x === 'main' || x === 'main_task' || x === 'project_question'
 
 export type CalibrationRow = {
   threshold: number
-  /** Labeled samples Jev would have routed by itself at this threshold. */
+  /** Records Jev would let through to the main line without asking at this threshold. */
   auto: number
-  /** …of which Jev's route matched what the user said. */
+  /** …of which the user also wanted the main line. */
   correct: number
-  /** correct / auto (null when nothing would be auto-routed). */
+  /** correct / auto (null when nothing would go through unasked). */
   accuracy: number | null
-  /** Share of labeled samples that would have asked. */
+  /** Share of the records that would show the dialog. */
   askRate: number | null
 }
 
-/** For each candidate route threshold: how many labeled samples route by themselves, and how many of those are right. */
-export function calibrate(samples: readonly RouteSample[], candidates: readonly number[] = [0.5, 0.6, 0.7, 0.8, 0.9]): { labeled: number; rows: CalibrationRow[] } {
-  const labeled = samples.filter(s => s.jev !== null && truthOf(s) !== null)
+/**
+ * Only main_task / project_question go through unasked (sidebar_knowledge always
+ * asks), so the threshold trades the dialogs shown against prompts wrongly sent
+ * to the main line. Records without a choice are left out.
+ */
+export function calibrate(records: readonly FeedbackRecord[], candidates: readonly number[] = [0.5, 0.6, 0.7, 0.8, 0.9]): { labeled: number; rows: CalibrationRow[] } {
+  const labeled = records.filter(r => r.choice !== null)
   const rows = candidates.map(threshold => {
-    const auto = labeled.filter(s => s.jev!.confidence >= threshold)
-    const correct = auto.filter(s => family(s.jev!.route) === family(truthOf(s)!)).length
+    const auto = labeled.filter(r => isMain(r.jev.route) && r.jev.confidence >= threshold)
+    const correct = auto.filter(r => isMain(r.choice!)).length
     return {
       threshold,
       auto: auto.length,
@@ -151,7 +145,7 @@ export function calibrate(samples: readonly RouteSample[], candidates: readonly 
 export function formatCalibration(c: ReturnType<typeof calibrate>): string[] {
   const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
   return [
-    `路由校正：${c.labeled} 筆有標記`,
-    ...c.rows.map(r => `門檻 ${r.threshold.toFixed(2)} · 自動 ${r.auto} 筆，對 ${r.correct}（${pct(r.accuracy)}）· 會詢問 ${pct(r.askRate)}`),
+    `路由校正：${c.labeled} 筆有你的選擇`,
+    ...c.rows.map(r => `門檻 ${r.threshold.toFixed(2)} · 不問直接進主線 ${r.auto} 筆，其中你也要主線 ${r.correct}（${pct(r.accuracy)}）· 會跳對話框 ${pct(r.askRate)}`),
   ]
 }

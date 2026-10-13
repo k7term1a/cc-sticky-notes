@@ -82,10 +82,13 @@ test('a tree: follow-ups are listed under their parent and a click shows the thr
 
   // the follow-up box: a child of the selected node, then that child is selected
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.input({ key: 'followup', text: '那 children 什麼時候算？' })
+  await pane.input({ key: 'followup:c1', text: '那 children 什麼時候算？' })
   await clock.advance(10) // the answer runs in $.clock.after(0)
   // the new note is selected: its card shows its question
   expect(await pane.find({ type: 'Text', text: /Q 那 children 什麼時候算？/ })).toBeDefined()
+  // the box is a new, empty one under the new note
+  expect(await pane.find({ key: 'followup:c1' })).toBeUndefined()
+  expect(JSON.stringify(await pane.find({ type: 'Input' }))).toContain('"value":""')
   await pane.unmount()
   await clock.advance(1000)
   expect(forks).toHaveLength(1)
@@ -116,4 +119,24 @@ test('/sn opens and closes the pane like /sticky-note', async ($, on) => {
   expect(isOpen).toBe(true)
   await $.command.run({ command: 'sn', args: '' } as never)
   expect(isOpen).toBe(false)
+})
+
+test('a pasted 12,000-character question and a 15,000-character answer still draw (Text / Markdown hold 10,000)', async ($, on) => {
+  const longQ = '貼上的內容'.repeat(2400) // 12,000 characters
+  const longA = '很長的答案。'.repeat(2500) // 15,000 characters
+  mock.store(on, { [`node:${ROOT}:big`]: { ...node('big', null, 1, '長問題', longA), question: longQ } })
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.repo', () => ({ value: null }))
+  on('command.register', () => ({ value: { command: 'sticky-note' } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    await pane.press({ key: 'node:big' })
+    expect(await pane.find({ type: 'Text', text: /（共 12000 字）/ })).toBeDefined()
+    expect(await pane.find({ key: 'node:big' })).toBeDefined() // the engine did not draw its own instead
+    await pane.unmount()
+  }
 })

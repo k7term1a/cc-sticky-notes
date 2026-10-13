@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { RouteSample } from '../types'
+import type { AskChoice, FeedbackRecord } from '../types'
 import { maskNewArgs, NEW_ARGS_MASK } from '../hooks/commands'
-import { calibrate, formatCalibration, listSamples, parseFeedback, recordSample, SAMPLE_CAP, sampleId, truthOf } from '../hooks/feedback'
+import { calibrate, formatCalibration, listRecords, parseFeedback, RECORD_CAP, recordId, saveRecord, setChoice } from '../hooks/feedback'
 import type { KV } from '../hooks/ports'
 import { describeKey, findKey, keyFiles, parseDotenv, resolveKey } from '../hooks/secrets'
 
@@ -17,62 +17,67 @@ const memKV = (): KV & { size: () => number } => {
   }
 }
 
-const sample = (i: number, route: string, confidence: number, feedback: RouteSample['feedback']): RouteSample => ({
-  id: sampleId(1000 + i, `r${i}`),
+const record = (i: number, route: string, confidence: number, choice: AskChoice | null): FeedbackRecord => ({
+  id: recordId(1000 + i, `r${i}`),
   at: 1000 + i,
   sessionId: 'S',
   prompt: `p${i}`,
   jev: { route, confidence, isFollowup: 0, needsProjectCtx: 0, tag: null },
   thresholds: { route: 0.6, followup: 0.6, needsCtx: 0.3 },
-  decision: route === 'main_task' ? 'main' : 'sidebar',
+  asked: route !== 'main_task' || confidence < 0.6,
+  outcome: choice ?? 'main',
+  choice,
+  choiceSource: choice === null ? null : 'ask',
   nodeId: null,
-  feedback,
 })
 
-describe('feedback', () => {
-  test('parses good / bad with an optional label, in English or Chinese', () => {
-    expect(parseFeedback('good')).toEqual({ verdict: 'right', expected: null })
-    expect(parseFeedback('bad project')).toEqual({ verdict: 'wrong', expected: 'project_question' })
-    expect(parseFeedback('錯 主線')).toEqual({ verdict: 'wrong', expected: 'main' })
-    expect(parseFeedback('bad nonsense')).toBeNull()
+describe('feedback records', () => {
+  test('/sn feedback: main | new | followup (or 主線 / 便利貼 / 追問), or good', () => {
+    expect(parseFeedback('main')).toEqual({ choice: 'main' })
+    expect(parseFeedback('new')).toEqual({ choice: 'new' })
+    expect(parseFeedback('追問')).toEqual({ choice: 'followup' })
+    expect(parseFeedback('便利貼')).toEqual({ choice: 'new' })
+    expect(parseFeedback('good')).toEqual({ good: true })
+    expect(parseFeedback('nonsense')).toBeNull()
     expect(parseFeedback('')).toBeNull()
   })
 
-  test('ids sort by time, and the store keeps at most SAMPLE_CAP per project', async () => {
-    expect(sampleId(5, 'a') < sampleId(40, 'a')).toBe(true)
+  test('ids sort by time; keys are feedback:<root>:<id>; at most RECORD_CAP per project', async () => {
+    expect(recordId(5, 'a') < recordId(40, 'a')).toBe(true)
     const kv = memKV()
-    for (let i = 0; i < SAMPLE_CAP + 3; i++) await recordSample(kv, '/p', sample(i, 'main_task', 1, null))
-    await recordSample(kv, '/other', sample(0, 'main_task', 1, null))
-    const kept = await listSamples(kv, '/p')
-    expect(kept).toHaveLength(SAMPLE_CAP)
+    for (let i = 0; i < RECORD_CAP + 3; i++) await saveRecord(kv, '/p', record(i, 'main_task', 1, null))
+    await saveRecord(kv, '/other', record(0, 'main_task', 1, null))
+    const kept = await listRecords(kv, '/p')
+    expect(kept).toHaveLength(RECORD_CAP)
     expect(kept[0]?.prompt).toBe('p3')
-    expect(await listSamples(kv, '/other')).toHaveLength(1)
+    expect(await listRecords(kv, '/other')).toHaveLength(1)
+    expect((await kv.keys()).every(k => k.startsWith('feedback:'))).toBe(true)
   })
 
-  test('truth: the expected label, else the decision when it was right', () => {
-    expect(truthOf(sample(0, 'main_task', 1, { verdict: 'right', expected: null, at: 0, source: 'command' }))).toBe('main')
-    expect(truthOf(sample(0, 'main_task', 1, { verdict: 'wrong', expected: 'sidebar', at: 0, source: 'command' }))).toBe('sidebar')
-    expect(truthOf(sample(0, 'main_task', 1, { verdict: 'wrong', expected: null, at: 0, source: 'command' }))).toBeNull()
-    expect(truthOf(sample(0, 'main_task', 1, null))).toBeNull()
+  test('setChoice records a later /sn feedback', async () => {
+    const kv = memKV()
+    const r = record(1, 'main_task', 0.9, null)
+    await saveRecord(kv, '/p', r)
+    expect(await setChoice(kv, '/p', r.id, 'new')).toMatchObject({ choice: 'new', choiceSource: 'command' })
+    expect(await setChoice(kv, '/p', 'missing', 'new')).toBeNull()
   })
 
-  test('calibrate: accuracy and ask rate per threshold', () => {
-    const fb = (expected: RouteSample['decision']) => ({ verdict: 'right' as const, expected: expected === 'ask' ? null : expected, at: 0, source: 'command' as const })
-    const samples = [
-      sample(1, 'sidebar_knowledge', 0.95, fb('sidebar')),
-      sample(2, 'sidebar_knowledge', 0.65, fb('project_question')), // the D15 case
-      sample(3, 'main_task', 0.99, fb('main')),
-      sample(4, 'main_task', 0.55, fb('main')),
-      sample(5, 'main_task', 0.9, null), // unlabeled: ignored
+  test('calibrate: what each main-line threshold would let through unasked, and how often it is right', () => {
+    const records = [
+      record(1, 'sidebar_knowledge', 0.95, 'new'), // always asked
+      record(2, 'main_task', 0.99, 'main'),
+      record(3, 'main_task', 0.65, 'new'), // Jev said main, the user wanted a note
+      record(4, 'main_task', 0.55, 'main'),
+      record(5, 'main_task', 0.9, null), // no choice: left out
     ]
-    const c = calibrate(samples, [0.5, 0.6, 0.7])
+    const c = calibrate(records, [0.5, 0.6, 0.7])
     expect(c.labeled).toBe(4)
     expect(c.rows).toEqual([
-      { threshold: 0.5, auto: 4, correct: 3, accuracy: 0.75, askRate: 0 },
-      { threshold: 0.6, auto: 3, correct: 2, accuracy: 2 / 3, askRate: 0.25 },
-      { threshold: 0.7, auto: 2, correct: 2, accuracy: 1, askRate: 0.5 },
+      { threshold: 0.5, auto: 3, correct: 2, accuracy: 2 / 3, askRate: 0.25 },
+      { threshold: 0.6, auto: 2, correct: 1, accuracy: 0.5, askRate: 0.5 },
+      { threshold: 0.7, auto: 1, correct: 1, accuracy: 1, askRate: 0.75 },
     ])
-    expect(formatCalibration(c)[0]).toBe('路由校正：4 筆有標記')
+    expect(formatCalibration(c)[0]).toBe('路由校正：4 筆有你的選擇')
   })
 })
 

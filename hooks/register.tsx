@@ -1,14 +1,15 @@
 // Entry point: the hooks, and portsOf — the one place `$` is turned into the
 // closures the logic modules use (ports.ts says why `$` itself cannot cross).
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { bookmarkNote, change, explainDrop, prepare, readOptions, recordRoute, routePrompt, startNote, type Options } from './notes'
-import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
+import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
+import { addUsage, claudeDelta, fetchDelta, readUsage, usageLine, type Usage } from './usage'
 
 // $.state values (types/index.d.ts). The loader reads atoms only from this file's own consts.
 const treeAtom = atom({ plugin: 'cc-sticky-notes', key: 'tree' } as const, null)
@@ -26,13 +27,28 @@ async function keyFilesOf($: EngineInterface): Promise<string[]> {
   return keyFiles(home, $.plugin.root)
 }
 
+const kvOf = ($: EngineInterface) => ({
+  get: (key: string) => $.store.get(key),
+  set: (key: string, value: never) => $.store.set(key, value),
+  delete: (key: string) => $.store.delete(key),
+  keys: () => $.store.keys(),
+})
+
 /**
- * The status line under the prompt (the developer's pick, PROBE.md「UI 能放在哪裡」 D):
- * "cc-sticky-note <the question this session follows up>". Redrawn whenever the tree
- * or the pending count changes.
+ * The status line under the prompt (PROBE.md「UI 能放在哪裡」 D): what this mod spent
+ * today (usage.ts), and the answers still pending. Desktop draws the plugin's name
+ * before it. Redrawn when a count, the tree or the pending number changes.
  */
 async function refreshStatus($: EngineInterface) {
-  $.ui.status(statusLine(await read($, treeAtom), await $.session.id(), await read($, pendingAtom)))
+  $.ui.status(usageLine(await readUsage(kvOf($), new Date()), await read($, pendingAtom)))
+}
+
+/** Adds one request's cost to today's count; a failure to count never fails the request. */
+function count($: EngineInterface, delta: Partial<Usage>) {
+  if (Object.keys(delta).length === 0) return
+  void addUsage(kvOf($), new Date(), delta)
+    .then(() => refreshStatus($))
+    .catch(() => {})
 }
 
 function portsOf($: EngineInterface): Ports {
@@ -48,15 +64,27 @@ function portsOf($: EngineInterface): Ports {
     },
     now: () => $.clock.now(),
     later: fn => void $.clock.after(0, fn),
-    store: {
-      get: key => $.store.get(key),
-      set: (key, value) => $.store.set(key, value),
-      delete: key => $.store.delete(key),
-      keys: () => $.store.keys(),
+    store: kvOf($),
+    // every request that costs a quota is counted as it leaves (usage.ts)
+    fetch: async (url, init) => {
+      let r: HttpResponse | null = null
+      try {
+        r = await $.http.fetch(url, init)
+        return r
+      } finally {
+        count($, fetchDelta(url, r))
+      }
     },
-    fetch: (url, init) => $.http.fetch(url, init),
-    fork: prompt => $.model.fork({ prompt }),
-    complete: request => $.model.complete(request),
+    fork: async prompt => {
+      const r = await $.model.fork({ prompt })
+      if ('usage' in r) count($, claudeDelta(r.usage))
+      return r
+    },
+    complete: async request => {
+      const r = await $.model.complete(request)
+      count($, claudeDelta(r.usage))
+      return r
+    },
     keys: {
       typesafe: async () => resolveKey('TYPESAFE_API_KEY', await $.env.get('TYPESAFE_API_KEY'), await keyFilesOf($), readText),
       openai: async () => resolveKey('OPENAI_API_KEY', await $.env.get('OPENAI_API_KEY'), await keyFilesOf($), readText),
@@ -163,8 +191,8 @@ export const register: Register = (on, options) => {
     if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
 
     const p = portsOf($)
-    const routed = await routePrompt(p, opts, e.text)
-    const keep = (nodeId: string | null) => p.later(() => void recordRoute(p, opts, e.text, routed, nodeId))
+    const routed = await routePrompt(p, opts, e.text, { remote: e.origin.kind === 'bridge' })
+    const keep = (nodeId: string | null) => p.later(() => void recordFeedback(p, opts, e.text, routed, nodeId))
     const d = routed.decision
     switch (d.kind) {
       case 'main':
@@ -172,13 +200,14 @@ export const register: Register = (on, options) => {
         keep(null)
         return next(e)
       case 'project_question':
-        keep(await bookmarkNote(p, e.text, d.route))
+        // the main line answers it; no note (going to the main line means no note)
+        keep(null)
         return next({ ...e, context: [...(e.context ?? []), d.context] })
       case 'sidebar':
         keep(
           await startNote(p, opts, {
             question: e.text,
-            attach: { kind: d.attach },
+            attach: d.parentId !== undefined ? { kind: 'under', parentId: d.parentId } : { kind: d.attach },
             answerer: d.answerer,
             route: d.route,
             tag: d.tag.kind === 'existing' ? d.tag.tag : undefined,

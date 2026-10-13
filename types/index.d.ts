@@ -84,36 +84,32 @@ export type Tree = {
   mainDigest: MainDigest | null
 }
 
-/** Routing labels the user can say were right. */
-export type RouteChoice = 'main' | 'sidebar' | 'followup' | 'project_question'
-
-/** What the user said about one routing decision. */
-export type RouteFeedback = {
-  verdict: 'right' | 'wrong'
-  /** What it should have been; null when unknown. */
-  expected: RouteChoice | null
-  at: number
-  source: 'command' | 'ask' | 'reclassify' | 'pane'
-}
+/** What the user can pick in the routing dialog (or say afterwards with /sn feedback). */
+export type AskChoice = 'followup' | 'new' | 'main'
 
 /**
- * One routing decision kept for calibrating the thresholds (PLAN.md: 50 real prompts).
- * $.store `route:<root>:<id>`, local only, capped per project.
+ * One routing decision kept for calibrating the thresholds: Jev's call, its
+ * confidence and the user's choice. $.store `feedback:<root>:<id>`, local only,
+ * capped per project. Written for every prompt Jev saw.
  */
-export type RouteSample = {
+export type FeedbackRecord = {
   id: string
   at: number
   sessionId: string
   /** First 200 characters of the prompt. Stays in the local store. */
   prompt: string
-  /** Jev's raw answer; null when Jev was unavailable. */
-  jev: { route: string; confidence: number; isFollowup: number; needsProjectCtx: number; tag: string | null } | null
+  /** Jev's answer (route, its confidence, and the other questions). */
+  jev: { route: string; confidence: number; isFollowup: number; needsProjectCtx: number; tag: string | null }
   thresholds: { route: number; followup: number; needsCtx: number }
-  /** What the decision table did. */
-  decision: 'main' | 'sidebar' | 'followup' | 'project_question' | 'ask'
+  /** Whether the dialog was shown. */
+  asked: boolean
+  /** What happened: the user's pick, or the main line / project question Jev let through. */
+  outcome: AskChoice | 'project_question'
+  /** The user's choice: in the dialog, or later with /sn feedback; null while they said nothing. */
+  choice: AskChoice | null
+  choiceSource: 'ask' | 'command' | null
   /** The node it made, if any. */
   nodeId: string | null
-  feedback: RouteFeedback | null
 }
 
 declare module 'claude-code' {
@@ -138,7 +134,7 @@ declare module 'claude-code' {
       turnsAtLastSidebar: number
       /** uuid of the last main-line user message (session.append door='prompt'). */
       lastPromptUuid: string | null
-      /** The last routing sample of this session, for /sticky-note feedback. */
+      /** The last feedback record of this session, for /sn feedback. */
       lastSampleId: string | null
     }
   }
