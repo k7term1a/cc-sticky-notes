@@ -142,6 +142,8 @@ declare module 'claude-code' {
       galleryMode: string
       /** TEMP: the card the prototype has open. */
       gallerySelected: string | null
+      /** TEMP: the question the prototype is rewriting. */
+      galleryEditing: string | null
     }
   }
 }

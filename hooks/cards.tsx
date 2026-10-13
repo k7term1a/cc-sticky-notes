@@ -21,8 +21,16 @@ import type { ElementTable, RenderElement, RenderSurface } from 'claude-code'
 import type { Tree, TreeNode } from '../types'
 import { derive, emptyTree, pathTo, rootOf } from './tree'
 
-export type CardsData = { tree: Tree | null; selectedId: string | null; sessionId: string; pending: number; surface: RenderSurface }
-export type CardsActions = { select(id: string | null): void; event(what: string): void }
+export type CardsData = {
+  tree: Tree | null
+  selectedId: string | null
+  /** The question being rewritten in place, if any. */
+  editingId: string | null
+  sessionId: string
+  pending: number
+  surface: RenderSurface
+}
+export type CardsActions = { select(id: string | null): void; edit(id: string | null): void; event(what: string): void }
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const when = (at: number) => {
@@ -83,17 +91,52 @@ export function threadOf(tree: Tree, pickedId: string, activeId: string | null):
   return path
 }
 
-/** The question drawn as the person's own prompt: Desktop's bubble look, on the right. */
-function bubble(els: ElementTable, surface: RenderSurface, key: string, text: string): RenderElement {
-  const { Box, Text } = els
+/**
+ * The question drawn as the person's own prompt: Desktop's bubble look, on the right,
+ * with ✎ beside it while the pointer is over the row (a Box cannot be pressed, and a
+ * Button draws one clipped line, so the bubble itself is not the press). The terminal
+ * has no pointer to reveal it: there ✎ is always drawn.
+ */
+function bubble(els: ElementTable, surface: RenderSurface, node: TreeNode, act: CardsActions): RenderElement {
+  const { Box, Text, Button } = els
   const look =
     surface === 'terminal'
       ? { borderStyle: 'round', borderDimColor: true }
       : // translucent gray: reads as the prompt bubble on the dark theme and on the light one
         { borderStyle: 'round', borderColor: '#80808040', backgroundColor: '#8080801f' }
   return (
-    <Box key={key} alignSelf="flex-end" paddingX={1} marginLeft={6} {...look}>
-      <Text>{clip(text, 300)}</Text>
+    <Box key={`q:${node.id}`} alignSelf="flex-end" flexDirection="row" alignItems="center" columnGap={1} marginLeft={6} hover={{}}>
+      <Box {...(surface === 'terminal' ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}>
+        <Button key={`edit:${node.id}`} plain dimColor label="✎" onPress={() => act.edit(node.id)} />
+      </Box>
+      <Box paddingX={1} {...look}>
+        <Text>{clip(node.question, 300)}</Text>
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * Rewriting a question asks it again beside the old one: a new follow-up of the same
+ * parent (a new topic for a first question), so the parent's answer then offers both.
+ */
+function editor(els: ElementTable, node: TreeNode, tree: Tree, act: CardsActions): RenderElement | null {
+  const { Box, Button } = els
+  const Input = 'Input' in els ? els.Input : undefined
+  if (!Input) return null
+  const parent = node.parentId === null ? null : tree.nodes[node.parentId]
+  return (
+    <Box key={`editing:${node.id}`} flexDirection="column" alignItems="flex-end" gap={1}>
+      <Input
+        key={`edit-box:${node.id}`}
+        value={node.question}
+        submitLabel="↵"
+        onSubmit={v => {
+          act.edit(null)
+          act.event(parent ? `在「${parent.title}」下多一個追問：「${v}」（原型不會送出）` : `開一張新的便利貼：「${v}」（原型不會送出）`)
+        }}
+      />
+      <Button key={`edit-cancel:${node.id}`} plain dimColor label="取消" onPress={() => act.edit(null)} />
     </Box>
   )
 }
@@ -145,7 +188,7 @@ export function cardsView(els: ElementTable, d: CardsData, act: CardsActions): R
               const next = thread[i + 1]
               return (
                 <Box key={`turn:${node.id}`} flexDirection="column" gap={1}>
-                  {bubble(els, d.surface, `q:${node.id}`, node.question)}
+                  {node.id === d.editingId ? editor(els, node, tree, act) : bubble(els, d.surface, node, act)}
                   <Markdown text={node.answer === '' ? '_回答中…_' : node.answer} />
                   {node.children.length > 1 && (
                     <Box flexDirection="row" flexWrap="wrap" columnGap={2}>

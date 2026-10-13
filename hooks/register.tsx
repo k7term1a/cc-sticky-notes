@@ -24,6 +24,7 @@ const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } a
 const galleryEventAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryEvent' } as const, '')
 const galleryModeAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryMode' } as const, '')
 const gallerySelectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'gallerySelected' } as const, null)
+const galleryEditingAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryEditing' } as const, null)
 
 /**
  * TEMP /sn ui-gallery [c] (gallery.tsx, cards.tsx): the catalog, or the card prototype.
@@ -221,8 +222,8 @@ export const register: Register = (on, options) => {
     const event = (what: string) => void update($, galleryEventAtom, () => what)
     const mode = await read($, galleryModeAtom)
     if (mode === '') return galleryView(els, await read($, galleryEventAtom), { event })
-    const data = { tree: await read($, treeAtom), selectedId: await read($, gallerySelectedAtom), sessionId: await $.session.id(), pending: await read($, pendingAtom), surface: e.surface }
-    const act = { select: (id: string | null) => void update($, gallerySelectedAtom, () => id), event: (what: string) => $.ui.toast(what) }
+    const data = { tree: await read($, treeAtom), selectedId: await read($, gallerySelectedAtom), editingId: await read($, galleryEditingAtom), sessionId: await $.session.id(), pending: await read($, pendingAtom), surface: e.surface }
+    const act = { select: (id: string | null) => void update($, gallerySelectedAtom, () => id), edit: (id: string | null) => void update($, galleryEditingAtom, () => id), event: (what: string) => $.ui.toast(what) }
     return cardsView(els, data, act)
   })
 

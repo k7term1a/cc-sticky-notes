@@ -179,6 +179,13 @@ test('TEMP /sn ui-gallery c: cards open on a press, read as a thread, and switch
     await pane.press({ key: 'pick:c3' })
     expect(await pane.find({ key: 'q:c1' })).toBeUndefined()
     expect(await pane.find({ key: 'reply:c3' })).toBeDefined()
+    // ✎ rewrites a question in place (on desktop it shows only under the pointer)
+    if (surface === 'terminal') {
+      await pane.press({ key: 'edit:c3' })
+      expect(await pane.find({ key: 'edit-box:c3' })).toBeDefined()
+      await pane.press({ key: 'edit-cancel:c3' })
+      expect(await pane.find({ key: 'edit-box:c3' })).toBeUndefined()
+    }
     await pane.press({ key: 'close:r1' })
     expect(await pane.find({ key: 'q:r1' })).toBeUndefined()
     await pane.unmount()
