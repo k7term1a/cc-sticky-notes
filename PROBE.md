@@ -96,6 +96,49 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 我傾向 **(b)**：比 (a) 少一個對話框，最後一個選項順便收集「分錯」的回饋（接上 D15 的回饋接口）。RC4 的轉圈要等你在 B 上實際看過可不可以接受。另外，答案字數上限（300 字以上會不會被截）可以再補一個探針。
 
+## 〇之七、遠端（手機、筆電）與 R1 / R5 探針（10/14）
+
+暫時的 `/sn probe …`（`register.tsx`，commit `5b40d7b`），紀錄在 `$.store` 的 `probe:log`。A 是跑 session 的 Windows 電腦（Claude Desktop，Remote Control 開著）。
+
+### 遠端：手機（Claude App）與另一台筆電（Remote Control）
+
+| 項目 | 手機 | 筆電 |
+| --- | --- | --- |
+| 以畫面接上（`session.attach`），`$.session.surfaces()` 出現 `mobile` | ✅ **沒有**：整段沒有 attach，surfaces 只有 A 自己的 `desktop`，也沒有任何 `mobile` 的 `ui.render`。⚠ 偏離型別檔（型別檔說手機會以 `mobile` 接上、請 mod 畫東西） | ✅ 沒有（同 10/07） |
+| 送來的 prompt | ✅ 先 `session.receive`，再 `prompt.submit`，origin 都是 `bridge` | ✅ 同手機 |
+| mod 的指令（`/sn probe out`）從遠端下 | ✅ 會在 A 上執行 | ✅ 同 |
+| **指令輸出**（command.run 回傳的 `text`） | ✅ **看得到**：灰字、前面一條垂直線 | ✅ 看得到 |
+| `$.ui.log` 灰字、`$.ui.toast` | ✅ 看不到 | ✅ 看不到 |
+| `turn.complete` 回傳的一行 | ✅ 看不到（hook 有執行） | ✅ 看不到 |
+| `$.ui.ask` | ✅ 看得到、能作答（回傳「看得到」） | ✅ 看得到、能作答 |
+| 作答後一直轉圈（RC4） | ✅ **不會** | ✅ **會**（同 10/07） |
+
+**結論**：遠端看得到的 mod 輸出只有兩條：**指令輸出**與 **`$.ui.ask` 對話框**。手機和筆電都只是 Remote Control 的遠端，不會讓 mod 畫介面。R2 的「遠端指令包」用指令輸出回傳；手機專用版面（R2 方向 3）做不到。
+
+### A 本機
+
+| 項目 | 結果 |
+| --- | --- |
+| `$.ui.toast` | ✅ Desktop 畫成右下角的通知 |
+| `turn.complete` 回傳的一行 | ✅ 有畫，但收在回答下方一個要點開的「Claude notice」裡，不是直接顯示 |
+| Desktop 視窗切換 session | ✅ 每切一次，舊 session 收到 `session.detach`（`desktop-2`），新 session 收到 `session.attach`（`surface: 'desktop'`，帶 viewport）。沒在看的 session，`surfaces` 是 `[]` |
+
+### R1：選取文字、放進輸入框、session 之間互傳
+
+| 項目 | 結果 |
+| --- | --- |
+| `$.ui.selection()` | ✗ **Desktop 回傳 `null`**。你選取文字後點輸入框打指令時，反白就消失了；就算沒消失，型別檔也說只有終端機全螢幕模式回答。⚠ 偏離 R1 的「選取文字」，只能做 code block 與指令 |
+| `$.prompt.fill({ text, mode: 'replace' })` | ✅ **Desktop 可以用**：文字出現在主輸入框（回傳 `isFilled: true`） |
+| `$.session.send({ to: { sessionId } })` | ⚠ **沒送到**：`isDelivered: false`，原因是 auto 權限模式的判斷器對 SendMessage 沒有給結論（「The server-side auto mode classifier gave no verdict for SendMessage」）。API 本身沒被拒；換成非 auto 模式、或再送一次，可能就會過。待重測 |
+| 名單（`probe:roster`） | ✅ 兩個不同專案的 session 都登記上了（共用的 `$.store` 可以當 session 名單） |
+
+### R5：Notion
+
+| 項目 | 結果 |
+| --- | --- |
+| `$.tool.list()` 裡的 MCP 工具 | ✅ 324 個；Notion 的 claude.ai connector 工具都在（`mcp__c20941de-…__notion-create-pages`、`notion-create-database`、`notion-create-comment` 等），所以 mod 用得到 Notion。名稱裡沒有 drive/google 字樣的工具 |
+| 實際寫入 Notion | ⏳ 沒測（只列名稱，沒有建頁面） |
+
 ## 〇之六、側邊欄美化：UI Gallery 與卡片原型（10/13）
 
 暫時的 `/sn ui-gallery`（`hooks/gallery.tsx`）把 pane 能用的元件各畫一次；`/sn ui-gallery c`（`hooks/cards.tsx`）是卡片原型。兩者在改版完成後刪掉。
