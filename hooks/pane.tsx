@@ -225,11 +225,12 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
                     <Markdown text={answerText(node, whole.has(node.id))} />
                     {mark !== '' && <Text dimColor>{mark}</Text>}
                     {node.children.length > 1 && (
-                      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+                      // its own block (the developer, 10/14): native buttons in a dim frame, apart from the answer
+                      <Box key={`picks:${node.id}`} flexDirection="row" flexWrap="wrap" alignItems="center" gap={1} borderStyle="round" borderDimColor paddingX={1}>
+                        <Text dimColor>追問</Text>
                         {node.children.map(c => (
                           <Button
                             key={`pick:${c}`}
-                            plain
                             dimColor={c !== next?.id}
                             label={`${c === next?.id ? '● ' : '○ '}${tree.nodes[c]?.title ?? ''}`}
                             onPress={() => act.select(c)}
