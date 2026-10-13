@@ -307,7 +307,7 @@ main_turns_since_last_sidebar: <整數>
 - prompt 框上方已經有一張「repo / 分支 / +26,036 −63 / Create PR」卡片和「1 running task」字樣，`AbovePrompt` 帶子會落在這附近；徽章要夠短，不要和這張卡片搶行。
 - prompt 框下方一列是 `+`、麥克風、權限模式（Auto）、模型（Sonnet 5.5）、effort（High）、用量圈。OpenAI 用量條放 pane 底部即可，不要再往這一列塞東西。
 
-**預設收合，一個小徽章就好。** Mods 沒有「可自由拖曳的浮動按鈕」這種渲染點，最接近的是 `AbovePrompt`：prompt 框上方一條只有一行高的帶子。平常只畫一個徽章，pane 不開；點徽章（或熱鍵）才 `$.ui.open` 開出完整的樹，pane 右上角本來就有關閉記號。新答案進來**自動開 pane 並選中它**（`autoOpenPane` 預設 `true`，10/07 改；可在設定關掉，關掉時只 toast）。實作後的位置：帶子改成輸入框下方的狀態列「cc-sticky-note <正在追問的題目>」，pane 用 `/sn` 開關（見 PROBE.md）。
+**預設收合，一個小徽章就好。** Mods 沒有「可自由拖曳的浮動按鈕」這種渲染點，最接近的是 `AbovePrompt`：prompt 框上方一條只有一行高的帶子。平常只畫一個徽章，pane 不開；點徽章（或熱鍵）才 `$.ui.open` 開出完整的樹，pane 右上角本來就有關閉記號。新答案進來**自動開 pane 並選中它**（`autoOpenPane` 預設 `true`，10/07 改；可在設定關掉，關掉時只 toast）。實作後的位置：帶子改成輸入框下方的狀態列，pane 用 `/sn` 開關（見 PROBE.md）。狀態列 10/14 改成這個 mod 今天用掉的額度「今日 Jev 12 次 · Claude 35k · OpenAI 8k」（Desktop 會在前面自己加上 plugin 名，所以文字裡不再寫 cc-sticky-note；`usage.ts`）。
 
 ```
 ┌ Sticky Notes 3 · 主線：auth 改 session cookie，剩 token 輪替 ·  [開啟 s] ┐  ← AbovePrompt 帶子，一行

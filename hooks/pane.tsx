@@ -31,15 +31,6 @@ export function activeTitle(tree: Tree | null, sessionId: string): string | null
   return id === null ? null : (tree?.nodes[id]?.title ?? null)
 }
 
-/**
- * The status line under the prompt (the developer's pick of the sites, no emoji):
- * "cc-sticky-note <the question this session follows up>", plain "cc-sticky-note"
- * when it follows none, "（回答中）" while answers are pending.
- */
-export function statusLine(tree: Tree | null, sessionId: string, pending: number): string {
-  const following = activeTitle(tree, sessionId)
-  return (following === null ? 'cc-sticky-note' : `cc-sticky-note ${following}`) + (pending > 0 ? '（回答中）' : '')
-}
 
 /** P9: an answer that did not come from the fork had no project context. */
 export function contextMark(n: TreeNode): string {

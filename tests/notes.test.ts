@@ -4,7 +4,7 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
-import { statusLine } from '../hooks/pane'
+import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
 import { loadTree } from '../hooks/tree'
@@ -377,17 +377,25 @@ describe('summary provider', () => {
   })
 })
 
-describe('status line (under the prompt, no emoji)', () => {
-  test('cc-sticky-note, then the question this session follows up, then 回答中', async () => {
+describe('status line: what the mod spent today (no emoji, no plugin name: Desktop draws it)', () => {
+  test('Jev calls and Claude tokens; OpenAI once used; the pending answers', () => {
+    const u = { jev: 12, claude: 34567, claudeCacheRead: 900000, openai: 0 }
+    expect(usageLine(u, 0)).toBe('今日 Jev 12 次 · Claude 35k')
+    expect(usageLine({ ...u, openai: 1234 }, 2)).toBe('今日 Jev 12 次 · Claude 35k · OpenAI 1.2k · 2 則回答中')
+    expect(usageLine(u, 1)).not.toMatch(/\p{Extended_Pictographic}|cc-sticky/u)
+    expect([shortCount(999), shortCount(1000), shortCount(9949), shortCount(10500)]).toEqual(['999', '1.0k', '9.9k', '11k'])
+  })
+
+  test('counted per local day: Jev by URL, OpenAI by total_tokens, Claude without cache reads', async () => {
     const f = fake()
-    expect(statusLine(await f.tree(), 'S1', 0)).toBe('cc-sticky-note')
-    const id = await startNote(f.ports, opts, { question: 'TCP 的 backpressure 是什麼原理？', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' } })
-    const t = await f.tree()
-    const title = t.nodes[id]!.title
-    expect(statusLine(t, 'S1', 0)).toBe(`cc-sticky-note ${title}`)
-    expect(statusLine(t, 'S1', 1)).toBe(`cc-sticky-note ${title}（回答中）`)
-    expect(statusLine(t, 'S2', 0)).toBe('cc-sticky-note')
-    expect(statusLine(t, 'S1', 1)).not.toMatch(/\p{Extended_Pictographic}/u)
+    const day = new Date(2026, 9, 14, 23, 59)
+    expect(usageKey(day)).toBe('usage:2026-10-14')
+    await addUsage(f.kv, day, fetchDelta('https://api.typesafe.ai/v1/systemone', null))
+    await addUsage(f.kv, day, fetchDelta('https://api.openai.com/v1/chat/completions', { status: 200, ok: true, headers: {}, text: '{"usage":{"total_tokens":150}}' }))
+    await addUsage(f.kv, day, claudeDelta({ input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 40000 }))
+    expect(await readUsage(f.kv, day)).toEqual({ jev: 1, claude: 35, claudeCacheRead: 40000, openai: 150 })
+    expect(await readUsage(f.kv, new Date(2026, 9, 15, 0, 1))).toEqual({ jev: 0, claude: 0, claudeCacheRead: 0, openai: 0 })
+    expect(fetchDelta('https://example.com', null)).toEqual({})
   })
 })
 
