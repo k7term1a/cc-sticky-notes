@@ -153,7 +153,7 @@ M0 實測註記：`$.model.fork` 只接受 `{ prompt }`，不能指定模型或 
 | 新標籤命名 | 自動，Jev `tag` 選到 `__new__` 時 | 問題、標題、既有標籤清單 | 一個標籤名 | < 1k |
 | 整合大綱 | 手動，pane 選取模式 →「整合 N 個」 | 各成員 root 的 title + summary + 第一層追問的 summary | `Outline { title, outline, memberIds }` | 每成員約 1–2k |
 | 重算大綱 | 手動，大綱列的「重算」 | 同上，含新增的追問 | 更新 `outline`，清掉 `staleSince` | 同上 |
-| 主線摘要 + 專案脈絡（R4） | 自動，每 `digestEvery`（預設 3）個主線回合，回合結束後在背景；`/sn ctx refresh` 或 pane「立即統整」手動 | 上一版摘要 + 已知的專案脈絡 + 最近 3 輪問答（回覆取頭尾各 600 字；OpenAI 時經 redact） | 摘要 ≤ 200 字存 `digest:<root>:<sessionId>`（每個 session 一份）；新的專案脈絡 0–3 條、每條 ≤ 100 字，加進 `context:<root>`（每個專案一份，只增不減，自己用 `/sn ctx rm` 或 pane ✕ 刪） | 2–4k |
+| 主線摘要 + 專案脈絡（R4） | 自動，每 `digestEvery`（預設 3）個主線回合，回合結束後在背景；`/sn ctx refresh` 或 pane「立即統整」手動 | 這個 session 第一次：整個 session（較早的每一句使用者 prompt 各 200 字、從新往舊最多 12,000 字，加最近 3 輪問答）；之後：上一版摘要 + 上次統整之後的問答（最多 10 輪）；都附已知的專案脈絡。回覆取頭尾各 600 字；OpenAI 時經 redact。只讀本 session 自己的對話 | 摘要 ≤ 200 字存 `digest:<root>:<sessionId>`（每個 session 一份）；新的專案脈絡 0–3 條、每條 ≤ 100 字，加進 `context:<root>`（每個專案一份，只增不減，自己用 `/sn ctx rm` 或 pane ✕ 刪） | 2–4k |
 | 合併相近標籤 | 手動，pane「整理標籤」 | 全部標籤 + 各自節點數 | 「A 併入 B」清單，確認後套用 | 1–3k |
 | digest / export | 手動，`/sticky-note digest` `export` | 該大綱或該標籤下所有 Q/A | `.claude/sticky-notes/digests/<slug>.md`、`tree-YYYY-MM-DD.md` | 依內容 |
 

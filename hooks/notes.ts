@@ -289,7 +289,7 @@ export async function digestNow(p: Ports, opts: Options, force = false): Promise
   let out = 'error'
   try {
     const r = await runDigest(
-      { kv: p.store, provider: summaryProvider(p, opts), root, sessionId, turns, now: await p.now(), newId: () => crypto.randomUUID() },
+      { kv: p.store, provider: summaryProvider(p, opts), root, sessionId, turns, now: await p.now(), newId: () => crypto.randomUUID(), every: opts.digestEvery || 3 },
       lastExchanges(await p.messages(), isTypedPrompt),
     )
     if (!r.ok) {

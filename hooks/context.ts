@@ -13,8 +13,17 @@ export type SessionDigest = {
   text: string
   /** $.session.turns() when it was written: the next one is due digestEvery turns later. */
   turns: number
+  /** How many typed prompts the main line had then: the next run reads the ones after it. */
+  prompts?: number
   at: number
 }
+
+/** The first run reads the whole session: its earlier prompts, newest back, up to this many characters. */
+export const EARLIER_BUDGET = 12000
+/** Each later run reads the exchanges since the last one, at most this many. */
+export const SINCE_MAX = 10
+/** The exchanges read in detail (prompt and reply) on the first run. */
+export const RECENT_DETAIL = 3
 
 export type ContextFact = {
   id: string
@@ -72,12 +81,41 @@ const DIGEST_SYSTEM =
   'an empty list when there is nothing new. ' +
   `${LANGUAGE_RULE} Reply with JSON only: {"digest": "...", "facts": ["..."]}`
 
-export function digestPrompt(previous: string | null, exchanges: readonly Exchange[], known: readonly string[]): string {
+/** What a run reads of the main line: on the first, the whole session's earlier prompts too. */
+export type DigestInput = { earlier: string[]; exchanges: Exchange[] }
+
+export function digestPrompt(previous: string | null, input: DigestInput, known: readonly string[]): string {
   return [
     `[previous digest]\n${previous ?? '(none)'}`,
     `[known project facts]\n${known.length ? known.map(f => `- ${f}`).join('\n') : '(none)'}`,
-    `[latest exchanges, oldest first]\n${exchanges.map(x => `user: ${clip(x.user, 600)}\nassistant: ${headTail(x.assistant, 600)}`).join('\n\n')}`,
+    ...(input.earlier.length > 0 ? [`[earlier prompts of this session, oldest first]\n${input.earlier.map(u => `- ${u}`).join('\n')}`] : []),
+    `[latest exchanges, oldest first]\n${input.exchanges.map(x => `user: ${clip(x.user, 600)}\nassistant: ${headTail(x.assistant, 600)}`).join('\n\n')}`,
   ].join('\n\n')
+}
+
+/**
+ * What a run reads. With no digest yet, the whole session: every earlier prompt
+ * (200 characters each, newest back while EARLIER_BUDGET lasts) and the last three
+ * exchanges in detail. After that, the exchanges since the last run (by the prompt
+ * count it kept), at most SINCE_MAX; when the count no longer fits (a compaction
+ * shortened the transcript), the last `fallback`.
+ */
+export function digestInput(all: readonly Exchange[], previous: SessionDigest | null, fallback: number): DigestInput {
+  if (previous === null) {
+    const recent = all.slice(-RECENT_DETAIL)
+    const earlier: string[] = []
+    let budget = EARLIER_BUDGET
+    for (const x of all.slice(0, -RECENT_DETAIL).reverse()) {
+      const u = clip(x.user, 200)
+      if (u.length > budget) break
+      budget -= u.length
+      earlier.unshift(u)
+    }
+    return { earlier, exchanges: recent }
+  }
+  const since = previous.prompts !== undefined ? all.length - previous.prompts : -1
+  const n = since > 0 && since <= all.length ? Math.min(since, SINCE_MAX) : Math.max(1, Math.min(fallback, SINCE_MAX))
+  return { earlier: [], exchanges: all.slice(-n) }
 }
 
 /** Accepts a bare JSON object or one in a ```json fence; null when the shape is off. */
@@ -112,30 +150,30 @@ export function addFacts(list: readonly ContextFact[], add: readonly ContextFact
  * a failed or malformed answer leaves both as they were and says why.
  */
 export async function runDigest(
-  d: { kv: KV; provider: SummaryProvider; root: string; sessionId: string; turns: number; now: number; newId: () => string },
-  exchanges: readonly Exchange[],
+  d: { kv: KV; provider: SummaryProvider; root: string; sessionId: string; turns: number; now: number; newId: () => string; every: number },
+  all: readonly Exchange[],
 ): Promise<{ ok: true; digest: string; added: number } | { ok: false; reason: string }> {
-  if (exchanges.length === 0) return { ok: false, reason: 'no exchanges' }
+  if (all.length === 0) return { ok: false, reason: 'no exchanges' }
   const previous = await readDigest(d.kv, d.root, d.sessionId)
   const facts = await readFacts(d.kv, d.root)
   const r = await d.provider.summarize('main-digest', {
     system: DIGEST_SYSTEM,
-    prompt: digestPrompt(previous?.text ?? null, exchanges, facts.map(f => f.text)),
+    prompt: digestPrompt(previous?.text ?? null, digestInput(all, previous, d.every), facts.map(f => f.text)),
     maxTokens: 600,
     hasProjectContent: true,
   })
   if (!r.ok) return { ok: false, reason: `${r.provider} ${r.reason}${r.detail ? ` ${r.detail}` : ''}` }
   const parsed = parseDigest(r.text)
   if (!parsed) return { ok: false, reason: 'malformed answer' }
-  await d.kv.set(digestKey(d.root, d.sessionId), { text: parsed.digest, turns: d.turns, at: d.now } satisfies SessionDigest)
+  await d.kv.set(digestKey(d.root, d.sessionId), { text: parsed.digest, turns: d.turns, prompts: all.length, at: d.now } satisfies SessionDigest)
   const fresh = parsed.facts.map(text => ({ id: d.newId(), text, at: d.now, sessionId: d.sessionId, source: 'auto' as const }))
   const next = addFacts(facts, fresh)
   if (next.length !== facts.length || fresh.length > 0) await d.kv.set(contextKey(d.root), next)
   return { ok: true, digest: parsed.digest, added: next.length - facts.length }
 }
 
-/** The main-line exchanges the digest reads: the last `n` typed prompts, each with the reply after it. */
-export function lastExchanges(messages: readonly { role: string; text: string }[], isTyped: (m: { role: string; text: string }) => boolean, n = 3): Exchange[] {
+/** The main line as exchanges: each typed prompt with the reply after it; the last `n` (all by default). */
+export function lastExchanges(messages: readonly { role: string; text: string }[], isTyped: (m: { role: string; text: string }) => boolean, n = Infinity): Exchange[] {
   const out: Exchange[] = []
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]!
@@ -144,5 +182,5 @@ export function lastExchanges(messages: readonly { role: string; text: string }[
     for (let j = i + 1; j < messages.length && !isTyped(messages[j]!); j++) if (messages[j]!.role === 'assistant' && messages[j]!.text !== '') reply = messages[j]!.text
     out.push({ user: m.text, assistant: reply })
   }
-  return out.slice(-n)
+  return n === Infinity ? out : out.slice(-n)
 }

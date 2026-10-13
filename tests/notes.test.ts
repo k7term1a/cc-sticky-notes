@@ -3,7 +3,7 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
-import { addFacts, digestDue, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
+import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
 import { digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
@@ -410,6 +410,18 @@ describe('R4: the main-line digest and the project context', () => {
       { user: 'u1', assistant: 'a1' },
       { user: 'u2', assistant: 'a2' },
     ])
+  })
+
+  test('the first run reads the whole session; later runs the exchanges since the last one', () => {
+    const all = Array.from({ length: 8 }, (_, i) => ({ user: `u${i + 1}`, assistant: `a${i + 1}` }))
+    // no digest yet: every earlier prompt, and the last three in detail
+    expect(digestInput(all, null, 3)).toEqual({ earlier: ['u1', 'u2', 'u3', 'u4', 'u5'], exchanges: all.slice(-3) })
+    // a digest kept at 5 prompts: the 3 since
+    expect(digestInput(all, { text: 'd', turns: 5, prompts: 5, at: 0 }, 3)).toEqual({ earlier: [], exchanges: all.slice(5) })
+    // a compaction shortened the transcript under the kept count: the last `every`
+    expect(digestInput(all.slice(0, 2), { text: 'd', turns: 9, prompts: 9, at: 0 }, 3).exchanges).toEqual(all.slice(0, 2))
+    // an old digest without the count: the last `every`
+    expect(digestInput(all, { text: 'd', turns: 5, at: 0 }, 2).exchanges).toEqual(all.slice(-2))
   })
 
   test('facts: malformed answers are no digest; over the cap the oldest automatic facts go, hand-added ones stay', () => {
