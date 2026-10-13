@@ -132,6 +132,8 @@ PLAN.md 以外、之後可能做的需求。每項寫需求本身、可行性（
 
 ## R4｜主線摘要與專案整體脈絡（10/13 提出）
 
+> **10/14 已實作**：`digestEvery` 預設 3（`/sn every <n>` 調整、0 關閉），回合結束後背景執行；`/sn provider claude|openai` 切換供應者；`/sn ctx` 與 pane 的「專案脈絡」卡片看與編輯。實作在 `hooks/context.ts`。順手補上 OpenAI 的 `redacted` 剝除（之前是 TODO，沒有真的剝）。
+
 ### 需求
 
 現在送給 Jev 的是原文片段（主線最近 3 句的前 300 字、Claude 最後一則回覆的前 300 字、目前追問的便利貼）。改成：

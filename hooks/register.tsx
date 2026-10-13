@@ -4,8 +4,9 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { change, digestNow, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
+import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
@@ -14,6 +15,9 @@ import { addUsage, claudeDelta, fetchDelta, readUsage, usageLine, type Usage } f
 // $.state values (types/index.d.ts). The loader reads atoms only from this file's own consts.
 const treeAtom = atom({ plugin: 'cc-sticky-notes', key: 'tree' } as const, null)
 const selectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'selectedId' } as const, null)
+const editingAtom = atom({ plugin: 'cc-sticky-notes', key: 'editingId' } as const, null)
+const contextRevAtom = atom({ plugin: 'cc-sticky-notes', key: 'contextRev' } as const, 0)
+const digestStatusAtom = atom({ plugin: 'cc-sticky-notes', key: 'digestStatus' } as const, { running: false, at: null, result: null })
 const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0)
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
@@ -97,6 +101,17 @@ function portsOf($: EngineInterface): Ports {
         ]
       },
     },
+    setOption: async (field, value) => {
+      try {
+        // the row of this plugin's own field: `cc-sticky-notes.<field>` (or `cc-sticky-notes@inline.<field>`)
+        const row = (await $.config.list()).find(r => /^cc-sticky-notes(@[^.]+)?\./.test(r.key) && r.key.endsWith(`.${field}`))
+        if (!row) return { ok: false, reason: `找不到 ${field} 這個設定` }
+        const r = await $.config.set({ key: row.key, value: value as never })
+        return r.deny !== undefined ? { ok: false, reason: r.deny } : { ok: true }
+      } catch (err) {
+        return { ok: false, reason: String(err).slice(0, 200) }
+      }
+    },
     ui: {
       log: (text, to) => $.ui.log(text, { to: to ?? 'transcript' }),
       toast: text => $.ui.toast(text),
@@ -126,19 +141,70 @@ function portsOf($: EngineInterface): Ports {
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
+      contextChanged: async () => void (await update($, contextRevAtom, n => n + 1)),
+      setDigestStatus: async (running, result) =>
+        void (await update($, digestStatusAtom, s => (running ? { ...s, running: true } : { running: false, at: Date.now(), result }))),
     },
   }
 }
 
-/** Pane click: show it and make it this session's activeThread. 回到主線 passes null. */
+/**
+ * A card press: opens the card holding this note (null closes). Reading a card does not
+ * make it the one this session follows up (10/14): a reply does, or the dialog's pick.
+ */
 async function selectNode($: EngineInterface, id: string | null) {
-  const p = portsOf($)
-  const sessionId = await p.sessionId()
+  await update($, editingAtom, () => null)
   await update($, selectedAtom, () => id)
-  await change(p, t => setActive(t, sessionId, id))
 }
 
-/** The pane's follow-up box: straight to a note under that node, no Jev (PLAN.md). */
+/** R4: what the project context card shows; read on each draw (contextRev makes it draw again). */
+async function contextData($: EngineInterface, opts: Options) {
+  await read($, contextRevAtom)
+  const how = { digestEvery: opts.digestEvery, provider: opts.summaryProvider, digestStatus: await read($, digestStatusAtom) }
+  try {
+    const p = portsOf($)
+    const root = await projectKey(p)
+    const facts = await readFacts(p.store, root)
+    const digest = (await readDigest(p.store, root, await p.sessionId()))?.text ?? null
+    return { ...how, digest, facts: facts.map(f => ({ id: f.id, text: f.text, source: f.source })) }
+  } catch {
+    // never let the context card refuse the whole pane
+    return { ...how, digest: null, facts: [] }
+  }
+}
+
+/** R4: the pane's edits to the project context. */
+async function editFacts($: EngineInterface, edit: (facts: ContextFact[]) => ContextFact[]) {
+  const p = portsOf($)
+  const root = await projectKey(p)
+  await p.store.set(contextKey(root), edit(await readFacts(p.store, root)))
+  await p.state.contextChanged()
+}
+
+/** 結束追問 on the green card: this session follows up no note. */
+async function unfollow($: EngineInterface) {
+  const p = portsOf($)
+  const sessionId = await p.sessionId()
+  await change(p, t => setActive(t, sessionId, null))
+}
+
+/**
+ * ✎: a rewritten question is asked again beside the old one — a new follow-up of the
+ * same parent, so the parent's answer offers both; a first question starts a new topic.
+ */
+async function rewrite($: EngineInterface, opts: Options, nodeId: string, question: string) {
+  const tree = await read($, treeAtom)
+  const parentId = tree?.nodes[nodeId]?.parentId ?? null
+  if (parentId !== null) return followUp($, opts, parentId, question)
+  await startNote(portsOf($), opts, {
+    question,
+    attach: { kind: 'root' },
+    answerer: 'fork',
+    route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' },
+  })
+}
+
+/** The pane's reply box: straight to a note under that node, no Jev (PLAN.md). */
 async function followUp($: EngineInterface, opts: Options, parentId: string, question: string) {
   await startNote(portsOf($), opts, {
     question,
@@ -161,6 +227,16 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     await update($, lastTurnAtom, () => e.turnId)
     return next(e)
+  })
+
+  // R4: every digestEvery main turns, the main-line digest and the project context, in the background
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined && e.reason === 'answer' && opts.digestEvery > 0) {
+      const p = portsOf($)
+      p.later(() => void digestNow(p, opts).catch(err => p.ui.log(`sticky-notes: main digest failed: ${String(err).slice(0, 200)}`, 'debug')))
+    }
+    return r
   })
 
   on('session.append', async ($, e, next) => {
@@ -226,13 +302,26 @@ export const register: Register = (on, options) => {
     const data = {
       tree: await read($, treeAtom),
       selectedId: await read($, selectedAtom),
+      editingId: await read($, editingAtom),
       sessionId: await $.session.id(),
       pending: await read($, pendingAtom),
+      surface: e.surface,
+      ...(await contextData($, opts)),
     }
     return paneView($.ui.resolve(e), data, {
       select: id => void selectNode($, id),
-      back: () => void selectNode($, null),
+      edit: id => void update($, editingAtom, () => id),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
+      rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
+      unfollow: () => void unfollow($),
+      addFact: text =>
+        void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
+      removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),
+      // the card itself shows 統整中… and then the outcome (digestStatus)
+      refreshDigest: () => {
+        const p = portsOf($)
+        p.later(() => void digestNow(p, opts, true))
+      },
     })
   })
 }

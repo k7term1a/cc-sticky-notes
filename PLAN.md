@@ -21,7 +21,7 @@ Oct 6, 2026 · @楷奇
 5. 選幾個 root 按「整合」，統整層產出一個大綱分組；大綱只有一層，不能再被整合。
 6. 旁支結論能一鍵回流進目前這個 session；要帶進另一個 session，就在那個 session 開 pane、點同一個節點、回流。
 7. 統整層預設走 Claude 訂閱（`$.model.complete`，可選模型與 effort），裝了就能用；設定 `summaryProvider = openai` 可改走 OpenAI 免費額度，兩條路功能相同。
-8. 不論哪個供應者，除了每節點的標題與摘要之外，會花額度的動作全部由我按下去才發生；OpenAI 超過 cap 就暫停並詢問。
+8. 不論哪個供應者，會自動花額度的只有：每節點的標題與摘要，以及每 `digestEvery` 個主線回合一次的主線摘要與專案脈絡（R4，10/14 起；`/sn every 0` 關閉）；其餘全部由我按下去才發生；OpenAI 超過 cap 就暫停並詢問。
 9. 沒有 Jev key 時所有輸入都進主線，只有 `/sticky-note new` 和 pane 追問框能建 note；不會跳對話框問我。
 10. Remote Control 遠端（bridge）送出的 prompt 不跳便利貼對話框：本機會問的那些句子，遠端一律進主線；其餘（Jev 分類、project_question 的 context、回饋紀錄）和本機（composer）相同（PROBE.md「Remote Control」）。
 
@@ -153,7 +153,7 @@ M0 實測註記：`$.model.fork` 只接受 `{ prompt }`，不能指定模型或 
 | 新標籤命名 | 自動，Jev `tag` 選到 `__new__` 時 | 問題、標題、既有標籤清單 | 一個標籤名 | < 1k |
 | 整合大綱 | 手動，pane 選取模式 →「整合 N 個」 | 各成員 root 的 title + summary + 第一層追問的 summary | `Outline { title, outline, memberIds }` | 每成員約 1–2k |
 | 重算大綱 | 手動，大綱列的「重算」 | 同上，含新增的追問 | 更新 `outline`，清掉 `staleSince` | 同上 |
-| 主線進度摘要 | 手動，`/sticky-note refresh` 或 pane 按鈕 | 上次摘要 + 之後的主線 user prompt 與 assistant 回覆（經 redact） | ≤ 200 字，存 `tree.mainDigest` | 5–15k |
+| 主線摘要 + 專案脈絡（R4） | 自動，每 `digestEvery`（預設 3）個主線回合，回合結束後在背景；`/sn ctx refresh` 或 pane「立即統整」手動 | 這個 session 第一次：整個 session（較早的每一句使用者 prompt 各 200 字、從新往舊最多 12,000 字，加最近 3 輪問答）；之後：上一版摘要 + 上次統整之後的問答（最多 10 輪）；都附已知的專案脈絡。回覆取頭尾各 600 字；OpenAI 時經 redact。只讀本 session 自己的對話 | 摘要 ≤ 200 字存 `digest:<root>:<sessionId>`（每個 session 一份）；新的專案脈絡 0–3 條、每條 ≤ 100 字，加進 `context:<root>`（每個專案一份，只增不減，自己用 `/sn ctx rm` 或 pane ✕ 刪） | 2–4k |
 | 合併相近標籤 | 手動，pane「整理標籤」 | 全部標籤 + 各自節點數 | 「A 併入 B」清單，確認後套用 | 1–3k |
 | digest / export | 手動，`/sticky-note digest` `export` | 該大綱或該標籤下所有 Q/A | `.claude/sticky-notes/digests/<slug>.md`、`tree-YYYY-MM-DD.md` | 依內容 |
 
@@ -227,7 +227,7 @@ interface Outline {
 - **新 root 由 Jev 決定**：`is_followup = false`（或本 session 沒有 `activeThread`）→ `parentId = null`，本 session 的 `activeThread = 新 id`。
 - **追問掛在目前節點下**：`is_followup = true` → `parentId = active:<root>:<sessionId>`，`activeThread = 新 id`。
 - **一個節點可以長出多個子問題**：點回某個較上層的節點再問，新節點就掛在它底下、和既有子節點並列。
-- 使用者在 pane 點選某節點 → 本 session 的 `activeThread` 改成該節點。「回到主線」設回 `null`。
+- 使用者在 pane 回覆某張便利貼 → 新節點成為本 session 的 `activeThread`；只是點開卡片來看不會改變（10/14 卡片版 pane）。「結束追問」（原「回到主線」）設回 `null`。
 - 整合大綱：只接受 root；已屬於別的大綱的 root 會被搬過來（UI 提示）；成員被搬光的舊大綱直接刪除；大綱本身不能被選取。
 - 成員之後有新追問 → 該大綱 `staleSince = now`，不自動重算。
 - 回流只送 `title + summary`，不送全文，目標是目前這個 session（`$.prompt.submit({ asUser: true })`）。不做跨 session 傳送：樹本來就是共用的，要帶進另一個 session 就到那邊開 pane、點同一個節點、回流。
@@ -291,7 +291,7 @@ main_turns_since_last_sidebar: <整數>
 
 **沒有 Jev key 時**：不分類、不問，所有輸入都走主線；只有 `/sticky-note new` 和 pane 追問框能建 note。不用 `$.model.classify` 當退路——它沒有信心值，分錯也看不出來，等於把「不要吞掉我的話」交給一個看不見的判斷。
 
-**標籤命名與主線摘要**都由「OpenAI 統整層」一節定義的工作負責；Jev 這邊只負責在既有標籤中選一個，或選 `__new__`。給 Jev 的 `[recent main-line context]` 在 M4 之後改用 `tree.mainDigest`，M1–M3 先用原文 300 字片段。
+**標籤命名與主線摘要**都由「OpenAI 統整層」一節定義的工作負責；Jev 這邊只負責在既有標籤中選一個，或選 `__new__`。給 Jev 的 state（R4，10/14）：有主線摘要時最前面是 `[main-line digest]`，接著 `[project facts]`（最新 8 條專案脈絡），再來 `[recent main-line context]`：最近 3 句使用者原文（各 300 字）與 Claude 上一則回覆的**最後** 300 字。
 
 **Jev 已知弱點要避開**：不做計數、不比日期；state 不要塞超過幾千字，雜訊會降準確度；對 prompt injection 敏感，所以 state 裡的 assistant 回覆只取前 300 字。中文準確度官方承認較低，若 M1 校正發現 `route` 分不準，先試把 `[new prompt]` 用 OpenAI 翻成英文再送 Jev，成本幾乎為零。
 
@@ -359,7 +359,9 @@ main_turns_since_last_sidebar: <整數>
 | `/sticky-note back` | 回到主線（清掉 `activeThread`） |
 | `/sticky-note promote [session 名]` | 回流 `activeThread` 進目前這個 session |
 | `/sticky-note outline` | 進入選取模式 |
-| `/sticky-note refresh` | 手動更新主線進度摘要（會顯示預估 token） |
+| `/sticky-note ctx [add <文字> \| rm <n> \| refresh]` | 看 / 編輯專案脈絡；`refresh` 立刻跑一次主線摘要（R4） |
+| `/sticky-note every <n>` | 每 n 個主線回合背景統整一次，0 = 關閉；寫進 plugin 設定 `digestEvery`（R4） |
+| `/sticky-note provider claude\|openai` | 切換統整層供應者；寫進 plugin 設定 `summaryProvider` |
 | `/sticky-note digest [大綱或標籤]` | 把一個大綱或一個標籤壓成一頁筆記寫進 `.claude/sticky-notes/digests/` |
 | `/sticky-note export` | 把整棵樹寫成 `.claude/sticky-notes/tree-YYYY-MM-DD.md` |
 | `/sticky-note mode <off\|redacted\|full>` | 切換 `openaiContextMode`，只影響本 session |

@@ -40,10 +40,11 @@ test('empty: the pane validates on terminal and desktop', async ($, on) => {
   }
 })
 
-test('a tree: follow-ups are listed under their parent and a click shows the thread', async ($, on) => {
+test('cards: one per topic; a press opens the thread; picks, reply, rewrite and 結束追問', async ($, on) => {
   mock.store(on, {
     [`node:${ROOT}:r1`]: node('r1', null, 1, '樹載入原因', '因為 $.store 一次只讀一個 key。', '一次只能讀一個 key。'),
     [`node:${ROOT}:c1`]: node('c1', 'r1', 2, '為何全讀', '因為 roots 與 children 是推出來的。'),
+    [`node:${ROOT}:c3`]: node('c3', 'r1', 4, '一個 JSON', '同時寫會互相蓋掉。'),
     [`node:${ROOT}:r2`]: node('r2', null, 3, 'TCP 背壓', '接收窗口。'),
   })
   const clock = mock.clock(on)
@@ -66,37 +67,59 @@ test('a tree: follow-ups are listed under their parent and a click shows the thr
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    const child = await pane.find({ key: 'node:c1' })
-    expect(child).toBeDefined()
-    expect(JSON.stringify(child)).toContain('└')
-    expect(await pane.find({ key: 'node:r2' })).toBeDefined()
-
-    await pane.press({ key: 'node:c1' })
-    // the card: earlier step compact, the question, the full answer
-    expect(await pane.find({ type: 'Text', text: /樹載入原因 — 一次只能讀一個 key/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /Q 為何全讀\?/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /追問第 2 層/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /在主輸入框直接打字＝追問「為何全讀」/ })).toBeDefined()
+    // closed cards, one per topic; no question drawn yet
+    expect(await pane.find({ key: 'open:r1' })).toBeDefined()
+    expect(await pane.find({ key: 'open:r2' })).toBeDefined()
+    expect(await pane.find({ key: 'q:r1' })).toBeUndefined()
+    // open: the thread runs on down by the newest follow-up (c3), with both offered as picks
+    await pane.press({ key: 'open:r1' })
+    expect(await pane.find({ key: 'q:r1' })).toBeDefined()
+    expect(await pane.find({ key: 'q:c3' })).toBeDefined()
+    expect(await pane.find({ key: 'pick:c1' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Q / })).toBeUndefined() // no Q/A words
+    await pane.press({ key: 'pick:c1' })
+    expect(await pane.find({ key: 'q:c1' })).toBeDefined()
+    expect(await pane.find({ key: 'q:c3' })).toBeUndefined()
+    expect(await pane.find({ key: 'reply:c1' })).toBeDefined()
+    await pane.press({ key: 'close:r1' })
+    expect(await pane.find({ key: 'q:r1' })).toBeUndefined()
     await pane.unmount()
   }
 
-  // the follow-up box: a child of the selected node, then that child is selected
-  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.input({ key: 'followup:c1', text: '那 children 什麼時候算？' })
+  // the reply box: a follow-up of the last note shown, which then is the one followed up
+  let pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'open:r1' })
+  await pane.press({ key: 'pick:c1' })
+  await pane.input({ key: 'reply:c1', text: '那 children 什麼時候算？' })
   await clock.advance(10) // the answer runs in $.clock.after(0)
-  // the new note is selected: its card shows its question
-  expect(await pane.find({ type: 'Text', text: /Q 那 children 什麼時候算？/ })).toBeDefined()
-  // the box is a new, empty one under the new note
-  expect(await pane.find({ key: 'followup:c1' })).toBeUndefined()
-  expect(JSON.stringify(await pane.find({ type: 'Input' }))).toContain('"value":""')
+  expect(await pane.find({ type: 'Text', text: /^那 children 什麼時候算？$/ })).toBeDefined()
+  expect(await pane.find({ key: 'reply:c1' })).toBeUndefined() // a fresh, empty box under the new note
+  expect(await pane.find({ key: 'unfollow:r1' })).toBeDefined() // the green card: this session follows it up
   await pane.unmount()
   await clock.advance(1000)
   expect(forks).toHaveLength(1)
-  // the answer and its title arrived
-  expect(await (async () => { const p = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE }); const t = await p.find({ type: 'Text', text: /^新追問$/ }); await p.unmount(); return t })()).toBeDefined()
   expect(forked).toContain('[side thread so far]')
   expect(forked).toContain('Q2: 為何全讀?')
   expect(forked).toContain('[question]\n那 children 什麼時候算？')
+
+  // 結束追問
+  pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'unfollow:r1' })
+  expect(await pane.find({ key: 'unfollow:r1' })).toBeUndefined()
+  await pane.unmount()
+
+  // ✎ (always drawn on the terminal): asked again beside the old question, under the same parent
+  // (the card is still open on the reply's thread, which runs through c1)
+  const term = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...PANE })
+  await term.press({ key: 'edit:c1' })
+  await term.input({ key: 'edit-box:c1', text: '換個問法：為什麼要全讀？' })
+  await clock.advance(10)
+  expect(await term.find({ key: 'edit-box:c1' })).toBeUndefined()
+  expect(await term.find({ type: 'Text', text: /^換個問法：為什麼要全讀？$/ })).toBeDefined()
+  await term.unmount()
+  await clock.advance(1000)
+  expect(forks).toHaveLength(2)
+  expect(forked).not.toContain('Q2: 為何全讀?') // a sibling of c1: c1 is not in its history
 })
 
 test('/sn opens and closes the pane like /sticky-note', async ($, on) => {
@@ -134,9 +157,34 @@ test('a pasted 12,000-character question and a 15,000-character answer still dra
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
-    await pane.press({ key: 'node:big' })
+    await pane.press({ key: 'open:big' })
     expect(await pane.find({ type: 'Text', text: /（共 12000 字）/ })).toBeDefined()
-    expect(await pane.find({ key: 'node:big' })).toBeDefined() // the engine did not draw its own instead
+    expect(await pane.find({ key: 'close:big' })).toBeDefined() // the engine did not draw its own instead
+    await pane.press({ key: 'close:big' }) // the selection outlives the mount
     await pane.unmount()
   }
+})
+
+test('R4: the project context card shows the digest and edits the facts', async ($, on) => {
+  mock.store(on, {
+    [`digest:${ROOT}:S1`]: { text: '主線在把 auth 改成 session cookie。', turns: 3, at: 1 },
+    [`context:${ROOT}`]: [{ id: 'f1', text: '我們用 session cookie，不用 JWT', at: 1, sessionId: 'S1', source: 'auto' }],
+  })
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.repo', () => ({ value: null }))
+  on('command.register', () => ({ value: { command: 'sticky-note' } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await pane.find({ type: 'Button', text: /專案脈絡　1 條/ } as never)).toBeDefined()
+  await pane.press({ key: 'open:context' })
+  expect(await pane.find({ type: 'Text', text: /^主線在把 auth 改成 session cookie。$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /每 3 回合背景統整 · Claude/ })).toBeDefined()
+  await pane.input({ key: 'fact-add:1', text: '部署前先跑 migration' })
+  expect(await pane.find({ type: 'Text', text: /^2\. 部署前先跑 migration（手動）$/ })).toBeDefined()
+  await pane.press({ key: 'fact-rm:f1' })
+  expect(await pane.find({ type: 'Text', text: /^1\. 部署前先跑 migration（手動）$/ })).toBeDefined()
+  await pane.unmount()
 })

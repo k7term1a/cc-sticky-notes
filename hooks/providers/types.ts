@@ -12,7 +12,7 @@ export type SummaryJob =
   | 'knowledge-answer'
 
 /** Jobs that run without the user pressing anything. Everything else is manual. */
-export const AUTO_JOBS: ReadonlySet<SummaryJob> = new Set(['node-title-summary', 'tag-name'])
+export const AUTO_JOBS: ReadonlySet<SummaryJob> = new Set(['node-title-summary', 'tag-name', 'main-digest'])
 
 export type SummaryInput = {
   system: string

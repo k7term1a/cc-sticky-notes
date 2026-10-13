@@ -141,7 +141,7 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 ## 〇之六、側邊欄美化：UI Gallery 與卡片原型（10/13）
 
-暫時的 `/sn ui-gallery`（`hooks/gallery.tsx`）把 pane 能用的元件各畫一次；`/sn ui-gallery c`（`hooks/cards.tsx`）是卡片原型。**10/14 依你的指示兩者都已刪除**（側邊欄美化先做到這裡）；卡片原型最後的樣子在 commit `bbf9316` 的 `hooks/cards.tsx`，之後搬進正式 pane 時從那裡取。
+暫時的 `/sn ui-gallery`（`hooks/gallery.tsx`）把 pane 能用的元件各畫一次；`/sn ui-gallery c`（`hooks/cards.tsx`）是卡片原型。**10/14 依你的指示兩者都已刪除**（側邊欄美化先做到這裡）；卡片原型最後的樣子在 commit `bbf9316` 的 `hooks/cards.tsx`。**10/14 已搬進正式 pane**（`hooks/pane.tsx`）：回覆、✎ 改寫、結束追問都接上真的動作；卡片由新到舊排；點開卡片不再設 `activeThread`；一段對話的答案從最新往回算，超過 60,000 字的較早回答改顯示摘要（一次繪製上限 100,000 字）。
 
 **和型別檔不符、或型別檔沒寫清楚的地方**
 

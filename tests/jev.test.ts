@@ -5,6 +5,8 @@ import { parseTitleSummary } from '../hooks/digest'
 import { buildRequest, buildState, classify, NEW_TAG, NO_NOTE, parseResponse, type JevInput } from '../hooks/jev'
 
 const input = (over: Partial<JevInput> = {}): JevInput => ({
+  digest: null,
+  facts: [],
   recentUser: ['u1', 'u2', 'u3', 'u4'],
   lastAssistant: 'a'.repeat(400),
   activeTitle: null,
@@ -17,11 +19,12 @@ const input = (over: Partial<JevInput> = {}): JevInput => ({
 })
 
 describe('jev request', () => {
-  test('state keeps the last 3 user prompts and clips the reply to 300 chars', () => {
-    const s = buildState(input())
+  test('state keeps the last 3 user prompts and the reply\'s last 300 chars (its conclusion)', () => {
+    const s = buildState(input({ lastAssistant: 'b'.repeat(100) + 'a'.repeat(300) }))
     expect(s).not.toContain('user: u1')
     expect(s).toContain('user: u4')
-    expect(s).toContain(`assistant: ${'a'.repeat(300)}…`)
+    expect(s).toContain(`assistant: …${'a'.repeat(300)}`)
+    expect(s).not.toContain('[main-line digest]')
     expect(s).toContain('active_thread_title: none')
     expect(s).toContain('main_turns_since_last_sidebar: 3')
     expect(s.endsWith('[new prompt]\n為什麼 TCP 要三次握手？')).toBe(true)
@@ -32,6 +35,15 @@ describe('jev request', () => {
     expect(none.questions.tag).toBeUndefined()
     const some = buildRequest(input({ tags: ['db'] })) as { questions: { tag: { criteria: Record<string, string> } } }
     expect(Object.keys(some.questions.tag.criteria)).toEqual(['db', NEW_TAG])
+  })
+})
+
+describe('jev state with the R4 digest', () => {
+  test('the main-line digest and the project facts come first, when there are any', () => {
+    const s = buildState(input({ digest: '主線在把 auth 改成 session cookie，剩 token 輪替。', facts: ['我們用 session cookie，不用 JWT'] }))
+    expect(s.startsWith('[main-line digest]\n主線在把 auth 改成 session cookie')).toBe(true)
+    expect(s).toContain('[project facts]\n- 我們用 session cookie，不用 JWT')
+    expect(s.indexOf('[project facts]')).toBeLessThan(s.indexOf('[recent main-line context]'))
   })
 })
 

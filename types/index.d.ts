@@ -119,6 +119,12 @@ declare module 'claude-code' {
       tree: Tree | null
       /** Node shown in the pane's answer area. */
       selectedId: string | null
+      /** The question the pane is rewriting in place (✎), if any. */
+      editingId: string | null
+      /** Bumped when the digest or the project context changes in the store, so the pane draws again. */
+      contextRev: number
+      /** R4: the digest run of this session: running now, or when the last one ended and how (in words). */
+      digestStatus: { running: boolean; at: number | null; result: string | null }
       /** Unread sidebar answers since the pane was last opened (badge count). */
       unread: number
       /** "只看本 session" filter. */
