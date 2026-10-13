@@ -193,3 +193,23 @@ test('TEMP /sn ui-gallery c: cards open on a press, read as a thread, and switch
   await $.command.run({ command: 'sn', args: 'ui-gallery c' } as never)
   expect(isOpen).toBe(false)
 })
+
+test('TEMP /sn probe: on, out, log, off', async ($, on) => {
+  mock.store(on)
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1-probe' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.surfaces', () => ({ value: ['desktop'] }) as never)
+  on('ui.log', () => ({ value: undefined }) as never)
+  on('ui.toast', () => ({ value: undefined }) as never)
+  expect(await $.command.run({ command: 'sn', args: 'probe on' } as never)).toMatchObject({ text: '[probe] 開始記錄' })
+  expect(await $.command.run({ command: 'sn', args: 'probe out' } as never)).toMatchObject({ text: expect.stringContaining('指令輸出') })
+  const log = (await $.command.run({ command: 'sn', args: 'probe log' } as never)) as { text: string }
+  expect(log.text).toContain('"kind":"probe.on"')
+  expect(log.text).toContain('"kind":"command probe out"')
+  await $.command.run({ command: 'sn', args: 'probe off' } as never)
+  const after = (await $.command.run({ command: 'sn', args: 'probe log' } as never)) as { text: string }
+  // the log while on was kept; nothing more once off
+  expect(after.text.split('command probe log').length - 1).toBe(1)
+  expect(after.text).toContain('command probe off')
+})
