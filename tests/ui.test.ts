@@ -140,3 +140,20 @@ test('a pasted 12,000-character question and a 15,000-character answer still dra
     await pane.unmount()
   }
 })
+
+test('TEMP /sn ui-gallery opens a pane that draws on terminal and desktop', async ($, on) => {
+  mock.store(on)
+  on('session.id', () => ({ value: 'S1' }))
+  const open: string[] = []
+  on('ui.open', ($, e) => (open.push(e.id), { value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }) as never)
+  await $.command.run({ command: 'sn', args: 'ui-gallery' } as never)
+  expect(open).toEqual(['sticky-gallery'])
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE, requestId: 'sticky-gallery' })
+    expect(await pane.find({ type: 'Text', text: /14\. 可用的符號/ })).toBeDefined()
+    await pane.press({ key: 'g-btn-primary' })
+    expect(await pane.find({ type: 'Text', text: /最後一個互動：Button primary/ })).toBeDefined()
+    await pane.unmount()
+  }
+})

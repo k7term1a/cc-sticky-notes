@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
+import { GALLERY_ID, GALLERY_TITLE, galleryView } from './gallery'
 import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
 import type { Ports } from './ports'
@@ -19,6 +20,15 @@ const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as co
 const turnsAtSidebarAtom = atom({ plugin: 'cc-sticky-notes', key: 'turnsAtLastSidebar' } as const, 0)
 const lastPromptAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastPromptUuid' } as const, null)
 const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } as const, null)
+const galleryEventAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryEvent' } as const, '')
+
+/** TEMP /sn ui-gallery (gallery.tsx): opens or closes the gallery pane; the args of every other command pass. */
+async function toggleGallery($: EngineInterface, args: string): Promise<boolean> {
+  if (args.trim() !== 'ui-gallery') return false
+  if ((await $.ui.panes()).some(pane => pane.id === GALLERY_ID)) await $.ui.close({ id: GALLERY_ID })
+  else await $.ui.open({ id: GALLERY_ID, title: GALLERY_TITLE })
+  return true
+}
 
 /** Key files to try after the environment (secrets.ts says which and why). */
 async function keyFilesOf($: EngineInterface): Promise<string[]> {
@@ -190,9 +200,14 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
+  on('command.run', { command: COMMAND }, async ($, e) => ((await toggleGallery($, e.args)) ? {} : runCommand(portsOf($), opts, e.args)))
   // /sn: the keyboard shortcut for the pane (the status line cannot be clicked; PROBE.md)
-  on('command.run', { command: SHORT_COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
+  on('command.run', { command: SHORT_COMMAND }, async ($, e) => ((await toggleGallery($, e.args)) ? {} : runCommand(portsOf($), opts, e.args)))
+
+  // TEMP /sn ui-gallery
+  on('ui.render', { component: 'Pane', requestId: GALLERY_ID }, async ($, e) =>
+    galleryView($.ui.resolve(e), await read($, galleryEventAtom), { event: what => void update($, galleryEventAtom, () => what) }),
+  )
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const data = {

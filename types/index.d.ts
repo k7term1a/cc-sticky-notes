@@ -136,6 +136,8 @@ declare module 'claude-code' {
       lastPromptUuid: string | null
       /** The last feedback record of this session, for /sn feedback. */
       lastSampleId: string | null
+      /** TEMP /sn ui-gallery: the last press, input or pick, shown at its top. */
+      galleryEvent: string
     }
   }
 }
