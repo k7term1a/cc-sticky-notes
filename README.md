@@ -2,7 +2,14 @@
 
 一個 Claude Code mod：在專案 session 裡隨口問的「為什麼 / 這是什麼」不會進主線對話，而是變成「便利貼」，在背景回答、顯示在右側 pane，並存成一棵同專案所有 session 共用的樹。主線的 context 保持乾淨，追問也能一路掛在同一條旁支下。
 
-版本 0.0.2，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)；之後可能做的需求：[REQUESTS.md](REQUESTS.md)。
+版本 0.0.3，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)；之後可能做的需求：[REQUESTS.md](REQUESTS.md)。
+
+**0.0.3 新的地方**
+
+- pane 改成卡片：一個主題一張卡，點開是一段對話（問題像 prompt 泡泡、答案在下面），多個追問用按鈕切換，卡片最下面直接回覆；滑鼠移到問題旁的 ✎ 可以換個問法再問一次。正在追問的那張是綠框，裡面有「結束追問」。
+- 主線摘要與專案脈絡：每 3 個主線回合在背景統整一次（第一次讀整個 session），Jev 判斷時會參考；pane 最下面的「專案脈絡」卡片可以看、刪、加，或按「立即統整」。
+- 新指令：`/sn provider claude|openai` 切換統整層、`/sn every <n>` 調整統整頻率（0 關閉）、`/sn ctx` 看與編輯專案脈絡。
+- OpenAI 的 `redacted` 模式現在真的會先剝掉程式碼、路徑、金鑰再送出（之前沒有）。
 
 **0.0.2 新的地方**
 
