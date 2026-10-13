@@ -29,6 +29,8 @@ export type CardsData = {
   sessionId: string
   pending: number
   surface: RenderSurface
+  /** TEMP: the last press the mod received, stamped with its time. */
+  lastPress: string
 }
 export type CardsActions = { select(id: string | null): void; edit(id: string | null): void; event(what: string): void }
 
@@ -157,6 +159,8 @@ export function cardsView(els: ElementTable, d: CardsData, act: CardsActions): R
         <Text bold>Sticky Notes</Text>
         <Text dimColor>{`${Object.keys(tree.nodes).length} 張${d.pending > 0 ? ` · ${d.pending} 回答中` : ''}`}</Text>
       </Box>
+      {/* TEMP: the last press as the mod received it (diagnosing presses that seem to need two clicks) */}
+      <Text dimColor>{`最後收到的點擊：${d.lastPress || '（還沒有）'}`}</Text>
 
       {tree.roots.map(id => {
         const root = tree.nodes[id]!
