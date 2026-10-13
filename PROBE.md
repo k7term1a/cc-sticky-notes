@@ -98,7 +98,7 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 ## 〇之七、遠端（手機、筆電）與 R1 / R5 探針（10/14）
 
-暫時的 `/sn probe …`（`register.tsx`，commit `5b40d7b`），紀錄在 `$.store` 的 `probe:log`。A 是跑 session 的 Windows 電腦（Claude Desktop，Remote Control 開著）。
+暫時的 `/sn probe …`（`register.tsx`，commit `5b40d7b`），紀錄在 `$.store` 的 `probe:log`。探完已刪除（10/14）；`$.store` 裡的 `probe:*` 幾個 key 留著，不影響運作。A 是跑 session 的 Windows 電腦（Claude Desktop，Remote Control 開著）。
 
 ### 遠端：手機（Claude App）與另一台筆電（Remote Control）
 
@@ -141,7 +141,7 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 ## 〇之六、側邊欄美化：UI Gallery 與卡片原型（10/13）
 
-暫時的 `/sn ui-gallery`（`hooks/gallery.tsx`）把 pane 能用的元件各畫一次；`/sn ui-gallery c`（`hooks/cards.tsx`）是卡片原型。兩者在改版完成後刪掉。
+暫時的 `/sn ui-gallery`（`hooks/gallery.tsx`）把 pane 能用的元件各畫一次；`/sn ui-gallery c`（`hooks/cards.tsx`）是卡片原型。**10/14 依你的指示兩者都已刪除**（側邊欄美化先做到這裡）；卡片原型最後的樣子在 commit `bbf9316` 的 `hooks/cards.tsx`，之後搬進正式 pane 時從那裡取。
 
 **和型別檔不符、或型別檔沒寫清楚的地方**
 

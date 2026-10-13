@@ -136,14 +136,6 @@ declare module 'claude-code' {
       lastPromptUuid: string | null
       /** The last feedback record of this session, for /sn feedback. */
       lastSampleId: string | null
-      /** TEMP /sn ui-gallery: the last press, input or pick, shown at its top. */
-      galleryEvent: string
-      /** TEMP /sn ui-gallery [a|b]: the catalog (''), or card plan a or b. */
-      galleryMode: string
-      /** TEMP: the card the prototype has open. */
-      gallerySelected: string | null
-      /** TEMP: the question the prototype is rewriting. */
-      galleryEditing: string | null
     }
   }
 }
