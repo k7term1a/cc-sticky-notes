@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { cardsA, cardsB } from './cards'
+import { cardsView } from './cards'
 import { GALLERY_ID, GALLERY_TITLE, galleryView } from './gallery'
 import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
@@ -26,11 +26,11 @@ const galleryModeAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryMode' } a
 const gallerySelectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'gallerySelected' } as const, null)
 
 /**
- * TEMP /sn ui-gallery [a|b] (gallery.tsx, cards.tsx): the catalog, or card plan a or b.
+ * TEMP /sn ui-gallery [c] (gallery.tsx, cards.tsx): the catalog, or the card prototype.
  * The same view again closes the pane; another switches it. Every other command passes.
  */
 async function toggleGallery($: EngineInterface, args: string): Promise<boolean> {
-  const m = /^ui-gallery(?:\s+([ab]))?$/.exec(args.trim())
+  const m = /^ui-gallery(?:\s+(c))?$/.exec(args.trim())
   if (!m) return false
   const mode = m[1] ?? ''
   const isOpen = (await $.ui.panes()).some(pane => pane.id === GALLERY_ID)
@@ -221,9 +221,9 @@ export const register: Register = (on, options) => {
     const event = (what: string) => void update($, galleryEventAtom, () => what)
     const mode = await read($, galleryModeAtom)
     if (mode === '') return galleryView(els, await read($, galleryEventAtom), { event })
-    const data = { tree: await read($, treeAtom), selectedId: await read($, gallerySelectedAtom), sessionId: await $.session.id(), pending: await read($, pendingAtom) }
+    const data = { tree: await read($, treeAtom), selectedId: await read($, gallerySelectedAtom), sessionId: await $.session.id(), pending: await read($, pendingAtom), surface: e.surface }
     const act = { select: (id: string | null) => void update($, gallerySelectedAtom, () => id), event: (what: string) => $.ui.toast(what) }
-    return mode === 'a' ? cardsA(els, data, act) : cardsB(els, data, act)
+    return cardsView(els, data, act)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {

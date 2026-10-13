@@ -51,7 +51,9 @@ const CODE = `export function derive(tree: Tree): Tree {
   return { ...tree, roots: roots.map(n => n.id) }
 }`
 
-const DIFF = `@@ -1,3 +1,3 @@
+const DIFF = `--- a/hooks/notes.ts
++++ b/hooks/notes.ts
+@@ -1,2 +1,2 @@
 -const QUESTION_CHARS = 30
 +const QUESTION_CHARS = 24
  const PREVIEW_CHARS = 40`
@@ -232,7 +234,8 @@ export function galleryView(els: ElementTable, lastEvent: string, act: GalleryAc
       {section(10, 'Link', Link ? (
         <Box flexDirection="column">
           <Link href="https://example.com" label="https 連結（example.com）" />
-          <Link href="file:///C:/Users/kay13/desktop/cc-sticky-notes/PLAN.md" label="file 連結（PLAN.md）" />
+          <Link href="http://localhost:3000" label="http://localhost 連結" />
+          <Text dimColor>file: 連結 Desktop 畫成純文字（只接受 https 與 http://localhost）</Text>
         </Box>
       ) : <Text dimColor>（這個畫面沒有 Link）</Text>)}
 
