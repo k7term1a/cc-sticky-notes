@@ -151,3 +151,22 @@ PLAN.md 以外、之後可能做的需求。每項寫需求本身、可行性（
 - PLAN 成功標準 8：「除了每節點的標題與摘要之外，會花額度的動作全部由我按下去才發生」。A、B 是自動花額度的工作。
 - PLAN 的 `mainDigest` 原本是 M4、手動 `/sticky-note refresh` 更新；這裡改成自動。
 - 確定後 PLAN.md 的成功標準 8、統整層工作表、Jev 分類設計一起改。
+
+---
+
+## R5｜透過 Notion 共享便利貼（10/13 提出）
+
+### 需求
+
+不是要在 Notion 上看，而是讓便利貼可以透過 Notion 分享給別人。
+
+### 可行性
+
+- 📄 `$.mcp.call(server, tool, args)` 可以呼叫 /mcp 列出的任何 server，包括 claude.ai 的 connector（例如 `claude.ai Notion`），用引擎自己的連線與授權，mod 不用放 token，也不會跳權限詢問。
+- 📄 也可以用 `$.http.fetch` 直接打 Notion API，但要另外放 integration token（和 Jev 金鑰一樣讀檔）。
+- 做法：`/sn share`（或 pane 按鈕）把選中的便利貼，或一整串追問，寫成一頁 Notion 頁面，回傳連結。本機 `$.store` 仍是正本。
+- 注意：fork 回答的答案可能帶到專案細節，分享前要讓你看過內容。
+
+### 還不知道
+
+Desktop session 裡 mod 呼叫 claude.ai connector 是否可行、Notion connector 的工具名稱與參數。探針：`$.mcp.call` 建一頁測試頁。

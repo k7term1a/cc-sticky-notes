@@ -154,8 +154,11 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
             text={selected.answer !== '' ? shownAnswer(selected.answer) : selected.promotedAt !== null ? '_這題在主線回答。_' : '_回答中…_'}
           />
           {Input && (
+            // keyed by the note: a sent follow-up selects its new note, so the box is a fresh, empty one
+            // (a field keeps what was typed until the hook draws another)
             <Input
-              key="followup"
+              key={`followup:${selected.id}`}
+              value=""
               placeholder="追問這一則…"
               submitLabel="送出"
               onSubmit={value => {
