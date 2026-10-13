@@ -39,7 +39,9 @@ export type Decision =
   /** Only ever made from the user's pick (decideFromChoice) or a manual entry. */
   | {
       kind: 'sidebar'
+      /** 'followup' goes under `parentId` when given, else under this session's activeThread. */
       attach: 'followup' | 'root'
+      parentId?: string
       answerer: Answerer
       tag: TagDecision
       route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }
@@ -78,37 +80,71 @@ const ROUTE_NAME: Record<RouteLabel, string> = {
 
 export const NEW_NOTE_LABEL = '開新的便利貼'
 export const MAIN_LABEL = '送進主線'
+export const OTHER_NOTE_LABEL = '接在其他便利貼下…'
 export const followupLabel = (title: string) => `接在「${title}」下`
 
-export type AskPrompt = { question: string; options: { label: string; choice: AskChoice }[] }
+/** 'pick' is 〔接在其他便利貼下…〕: a second dialog chooses the note. */
+export type DialogChoice = AskChoice | 'pick'
+export type AskPrompt = { question: string; options: { label: string; choice: DialogChoice }[] }
 
 /**
- * The dialog: Jev's call and confidence in the question; with an active thread
- * 〔接在「…」下〕〔開新的便利貼〕〔送進主線〕, the first two ordered by is_followup;
- * without one 〔開新的便利貼〕〔送進主線〕.
+ * The note the dialog offers to follow up: the one Jev says the prompt continues,
+ * else this session's activeThread; `likely` is how sure (continues' confidence,
+ * or is_followup for the activeThread).
  */
-export function askPrompt(verdict: JevVerdict, ctx: { activeTitle: string | null; followupThreshold: number }): AskPrompt {
+export type Suggested = { id: string; title: string; likely: number }
+
+/**
+ * The dialog: Jev's call and confidence in the question;
+ * 〔接在「<suggested>」下〕〔開新的便利貼〕, ordered by how likely the follow-up is,
+ * then 〔送進主線〕, then 〔接在其他便利貼下…〕 when there are notes besides the
+ * suggested one (four options, the dialog's most). No suggestion, no first option.
+ */
+export function askPrompt(verdict: JevVerdict, ctx: { suggested: Suggested | null; hasOthers: boolean; followupThreshold: number }): AskPrompt {
   const pct = Math.round(verdict.route.confidence * 100)
   const question = `這句要怎麼處理？(Jev：${ROUTE_NAME[verdict.route.label]} ${pct}%)`
   const fresh = { label: NEW_NOTE_LABEL, choice: 'new' as const }
   const main = { label: MAIN_LABEL, choice: 'main' as const }
-  if (ctx.activeTitle === null) return { question, options: [fresh, main] }
-  const follow = { label: followupLabel(ctx.activeTitle), choice: 'followup' as const }
-  const first = verdict.isFollowup >= ctx.followupThreshold ? [follow, fresh] : [fresh, follow]
-  return { question, options: [...first, main] }
+  const other = ctx.hasOthers ? [{ label: OTHER_NOTE_LABEL, choice: 'pick' as const }] : []
+  if (ctx.suggested === null) return { question, options: [fresh, main, ...other] }
+  const follow = { label: followupLabel(ctx.suggested.title), choice: 'followup' as const }
+  const first = ctx.suggested.likely >= ctx.followupThreshold ? [follow, fresh] : [fresh, follow]
+  return { question, options: [...first, main, ...other] }
 }
 
-/** The label the user picked → their choice; free text under "Other" is no choice (main line). */
-export function choiceOf(prompt: AskPrompt, answer: string): AskChoice | null {
+export const PICK_QUESTION = '接在哪一張便利貼下？（不在清單裡就在「其他」打標題的關鍵字）'
+
+/**
+ * The second dialog, after 〔接在其他便利貼下…〕: up to four notes as 〔「<title>」〕,
+ * a repeated title told apart by a number; 〔送進主線〕 when fewer than two notes
+ * (a dialog takes 2–4 options).
+ */
+export function pickPrompt(notes: readonly { id: string; title: string }[]): { question: string; options: { label: string; id: string | null }[] } {
+  const seen = new Map<string, number>()
+  const options = notes.slice(0, 4).map(n => {
+    const k = (seen.get(n.title) ?? 0) + 1
+    seen.set(n.title, k)
+    return { label: k === 1 ? `「${n.title}」` : `「${n.title}」(${k})`, id: n.id as string | null }
+  })
+  if (options.length < 2) options.push({ label: MAIN_LABEL, id: null })
+  return { question: PICK_QUESTION, options }
+}
+
+/** The label the user picked → their choice; free text under "Other" is none (notes.ts searches it). */
+export function choiceOf(prompt: AskPrompt, answer: string): DialogChoice | null {
   return prompt.options.find(o => o.label === answer)?.choice ?? null
 }
 
-/** The user's pick → what happens. The node's route records the pick (source 'ask') and Jev's confidence. */
-export function decideFromChoice(choice: AskChoice | null, verdict: JevVerdict, tagsKnown: number): Decision {
+/**
+ * The user's pick → what happens. The node's route records the pick (source 'ask')
+ * and Jev's confidence; a follow-up goes under `parentId` (the note picked).
+ */
+export function decideFromChoice(choice: AskChoice | null, verdict: JevVerdict, tagsKnown: number, parentId?: string): Decision {
   if (choice === null || choice === 'main') return { kind: 'main' }
   return {
     kind: 'sidebar',
     attach: choice === 'followup' ? 'followup' : 'root',
+    ...(choice === 'followup' && parentId !== undefined ? { parentId } : {}),
     answerer: verdict.needsProjectCtx >= NEEDS_CTX_AT ? 'fork' : 'summary-provider',
     tag: decideTag(verdict, tagsKnown),
     route: { label: choice, confidence: verdict.route.confidence, source: 'ask' },

@@ -6,7 +6,7 @@ import { listRecords } from '../hooks/feedback'
 import { explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { statusLine } from '../hooks/pane'
 import type { KV, Ports } from '../hooks/ports'
-import { MAIN_LABEL, NEW_NOTE_LABEL } from '../hooks/route'
+import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
 import { loadTree } from '../hooks/tree'
 
 const ROOT = '/repo'
@@ -21,6 +21,7 @@ type Fake = {
   logs: string[]
   asked: () => number
   lastAsk: () => { question: string; options: string[] } | null
+  asks: () => { question: string; options: string[] }[]
   opened: () => number
   runLater(): Promise<void>
   tree(): Promise<Tree>
@@ -28,7 +29,7 @@ type Fake = {
 }
 
 /** A Ports with everything in memory; Jev answers from `jev`, the fork echoes. */
-function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string } = {}): Fake {
+function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string | string[] } = {}): Fake {
   const mem = new Map<string, string>()
   const kv: KV = {
     get: async k => (mem.has(k) ? JSON.parse(mem.get(k)!) : undefined),
@@ -44,6 +45,8 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   let session = 'S1'
   let asked = 0
   let lastAsk: { question: string; options: string[] } | null = null
+  const asks: { question: string; options: string[] }[] = []
+  const answers = Array.isArray(opts.askAnswer) ? [...opts.askAnswer] : null
   let openaiCalls = 0
   let opened = 0
   let now = 1000
@@ -86,8 +89,10 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       ask: async (question, options) => {
         asked++
         lastAsk = { question, options: [...options] }
-        if (opts.askAnswer === undefined) throw new Error('dismissed')
-        return opts.askAnswer
+        asks.push(lastAsk)
+        const a = answers ? answers.shift() : (opts.askAnswer as string | undefined)
+        if (a === undefined) throw new Error('dismissed')
+        return a
       },
       openPane: async () => void opened++,
       closePane: async () => {},
@@ -119,6 +124,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     logs,
     asked: () => asked,
     lastAsk: () => lastAsk,
+    asks: () => asks,
     opened: () => opened,
     runLater: async () => {
       while (queue.length) {
@@ -199,6 +205,59 @@ describe('routePrompt: Jev never makes a note by itself', () => {
     const f = fake({ typesafeKey: 'k', jev: () => ({ nope: true }) })
     expect((await routePrompt(f.ports, opts, 'x')).decision).toEqual({ kind: 'main' })
     expect(f.asked()).toBe(0)
+  })
+})
+
+describe('which note a follow-up goes under (R6)', () => {
+  const twoNotes = async (f: Fake) => {
+    const a = await startNote(f.ports, opts, { question: 'What is CRDT about?', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    const b = await startNote(f.ports, opts, { question: 'TCP backpressure?', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await f.runLater()
+    return { a, b } // b is this session's activeThread
+  }
+  const jevPick = (key: string, confidence: number, probabilities: Record<string, number> = {}) => () => ({
+    answers: {
+      route: { type: 'choice', choice: 'sidebar_knowledge', confidence: 0.9 },
+      is_followup: { type: 'noul', noul: 0.1 },
+      needs_project_ctx: { type: 'noul', noul: 1 },
+      continues: { type: 'choice', choice: key, confidence, probabilities },
+    },
+  })
+
+  test('Jev is asked which recent note the prompt continues, the activeThread listed first', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevPick('none', 0.9) })
+    await twoNotes(f)
+    await routePrompt(f.ports, opts, 'x').catch(() => {})
+    const criteria = (f.jevCalls.at(-1) as { questions: { continues: { criteria: Record<string, string> } } }).questions.continues.criteria
+    expect(Object.keys(criteria)).toEqual(['n1', 'n2', 'none'])
+    expect(criteria.n1).toContain('標題') // the activeThread (b), titled by the summary stub
+  })
+
+  test("the dialog offers the note Jev picked, not the activeThread, and the follow-up goes under it", async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevPick('n2', 0.8), askAnswer: '接在「標題」下' })
+    const { a } = await twoNotes(f)
+    const r = await routePrompt(f.ports, opts, 'and conflicts?')
+    expect(f.lastAsk()?.options).toEqual(['接在「標題」下', NEW_NOTE_LABEL, MAIN_LABEL, OTHER_NOTE_LABEL])
+    expect(r).toMatchObject({ choice: 'followup', decision: { kind: 'sidebar', attach: 'followup', parentId: a } })
+  })
+
+  test('〔接在其他便利貼下…〕 asks again with the other notes, and the pick is the parent', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevPick('none', 0.9), askAnswer: [OTHER_NOTE_LABEL, '「標題」'] })
+    const { a } = await twoNotes(f)
+    const r = await routePrompt(f.ports, opts, 'and conflicts?')
+    expect(f.asks()).toHaveLength(2)
+    expect(f.asks()[1]!.options).toEqual(['「標題」', MAIN_LABEL])
+    expect(r).toMatchObject({ choice: 'followup', decision: { parentId: a } })
+  })
+
+  test('text under "Other" finds a note by its words; nothing found goes to the main line with a toast', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevPick('none', 0.9), askAnswer: 'crdt' })
+    const { a } = await twoNotes(f)
+    expect(await routePrompt(f.ports, opts, 'and conflicts?')).toMatchObject({ choice: 'followup', decision: { parentId: a } })
+    const g = fake({ typesafeKey: 'k', jev: jevPick('none', 0.9), askAnswer: '量子' })
+    await twoNotes(g)
+    expect(await routePrompt(g.ports, opts, 'x')).toMatchObject({ choice: null, decision: { kind: 'main' } })
+    expect(g.toasts.some(t => t.includes('找不到「量子」'))).toBe(true)
   })
 })
 
@@ -343,8 +402,8 @@ describe('the drop line and the log preview', () => {
   })
 
   test('the drop reason says where the note went (every note is the user pick)', () => {
-    expect(explainDrop('CRDT 是什麼？', { decision: note('root'), verdict: v(0.95), asked: true, choice: 'new', activeTitle: null })).toBe('cc-sticky-note：新的便利貼「CRDT 是什麼？」')
-    expect(explainDrop('那衝突怎麼解？', { decision: note('followup'), verdict: v(0.88), asked: true, choice: 'followup', activeTitle: 'CRDT無衝突複製' })).toBe(
+    expect(explainDrop('CRDT 是什麼？', { decision: note('root'), verdict: v(0.95), asked: true, choice: 'new', parentTitle: null })).toBe('cc-sticky-note：新的便利貼「CRDT 是什麼？」')
+    expect(explainDrop('那衝突怎麼解？', { decision: note('followup'), verdict: v(0.88), asked: true, choice: 'followup', parentTitle: 'CRDT無衝突複製' })).toBe(
       'cc-sticky-note：接在「CRDT無衝突複製」下「那衝突怎麼解？」',
     )
   })
@@ -367,7 +426,7 @@ describe('the drop line and the log preview', () => {
 
   test('the drop reason quotes at most 24 characters of the question', () => {
     const long = '為什麼分散式系統裡的 CRDT 可以不靠中央伺服器就讓所有副本最後一致？'
-    expect(explainDrop(long, { decision: note('root'), verdict: v(0.9), asked: true, choice: 'new', activeTitle: null })).toBe(
+    expect(explainDrop(long, { decision: note('root'), verdict: v(0.9), asked: true, choice: 'new', parentTitle: null })).toBe(
       `cc-sticky-note：新的便利貼「${[...long].slice(0, 24).join('')}…」`,
     )
   })

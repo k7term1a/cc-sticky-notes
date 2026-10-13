@@ -3,7 +3,7 @@
 // sync, and keeping the routing feedback records. Everything outside goes through Ports.
 import type { ModelEffort, PluginOptions } from 'claude-code'
 
-import type { AskChoice, FeedbackRecord, Tree } from '../types'
+import type { AskChoice, FeedbackRecord, Tree, TreeNode } from '../types'
 import { answerSide } from './answer'
 import { titleAndSummary } from './digest'
 import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
@@ -12,7 +12,7 @@ import type { Ports } from './ports'
 import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
-import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, type Decision } from './route'
+import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, pickPrompt, type Decision, type Suggested } from './route'
 import { addNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
@@ -111,8 +111,8 @@ export function dropReason(question: string): string {
  */
 export function explainDrop(question: string, routed: Routed): string {
   const where =
-    routed.decision.kind === 'sidebar' && routed.decision.attach === 'followup' && routed.activeTitle !== null
-      ? `接在「${routed.activeTitle}」下`
+    routed.decision.kind === 'sidebar' && routed.decision.attach === 'followup' && routed.parentTitle !== null
+      ? `接在「${routed.parentTitle}」下`
       : '新的便利貼'
   return `cc-sticky-note：${where}「${snippet(question, QUESTION_CHARS)}」`
 }
@@ -127,8 +127,34 @@ export function isTypedPrompt(m: { role: string; text: string }): boolean {
   return t !== '' && !/^<(command-|local-command-|system-reminder)/.test(t)
 }
 
+/** How many recent notes Jev is asked about (`continues`): enough to find the one, few enough to stay accurate. */
+export const CANDIDATES = 8
+
+/** The notes Jev may say a prompt continues: this session's activeThread first, then the newest. */
+export function recentNotes(tree: Tree, activeId: string | null, n = CANDIDATES): TreeNode[] {
+  const active = activeId ? tree.nodes[activeId] : undefined
+  const rest = Object.values(tree.nodes)
+    .filter(x => x.id !== active?.id)
+    .sort((a, b) => b.anchor.at - a.anchor.at)
+  return (active ? [active, ...rest] : rest).slice(0, n)
+}
+
+/**
+ * A note by a keyword typed under the dialog's "Other": the newest whose title
+ * or question holds it (brackets and case ignored), or whose title it holds.
+ */
+export function findNote(tree: Tree, typed: string): TreeNode | null {
+  const k = typed.replace(/[「」『』"']/g, '').trim().toLowerCase()
+  if (k === '') return null
+  const hits = Object.values(tree.nodes).filter(n => {
+    const title = n.title.toLowerCase()
+    return title.includes(k) || n.question.toLowerCase().includes(k) || ([...title].length >= 2 && k.includes(title))
+  })
+  return hits.sort((a, b) => b.anchor.at - a.anchor.at)[0] ?? null
+}
+
 /** Jev input from the session's own transcript (PLAN.md: raw 300-char clips until M4). */
-export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: string): Promise<jev.JevInput> {
+export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: string, candidates: jev.Candidate[] = []): Promise<jev.JevInput> {
   const list = await p.messages()
   const active = tree.activeThread[sessionId] ?? null
   const node = active ? tree.nodes[active] : undefined
@@ -142,6 +168,7 @@ export async function jevInput(p: Ports, tree: Tree, sessionId: string, prompt: 
     mainTurnsSinceLastSidebar: Math.max(0, turns - at),
     prompt,
     tags: tree.tags,
+    candidates,
   }
 }
 
@@ -150,10 +177,31 @@ export type Routed = {
   verdict: jev.JevVerdict | null
   /** Whether the dialog was shown. */
   asked: boolean
-  /** The user's pick in the dialog; null when not asked, dismissed, or free text. */
+  /** The user's pick in the dialogs; null when not asked, dismissed, or free text that found no note. */
   choice: AskChoice | null
-  /** Title of this session's activeThread when the prompt came in (a follow-up's parent). */
-  activeTitle: string | null
+  /** Title of the note a follow-up goes under; null otherwise. */
+  parentTitle: string | null
+}
+
+/**
+ * The note the dialog offers first: the one Jev says the prompt continues, else
+ * this session's activeThread (how likely: is_followup); none without either.
+ */
+function suggestionOf(verdict: jev.JevVerdict, keyed: readonly { key: string; node: TreeNode }[], active: TreeNode | undefined): Suggested | null {
+  const c = verdict.continues
+  const hit = c && c.label !== jev.NO_NOTE ? keyed.find(k => k.key === c.label) : undefined
+  if (hit && c) return { id: hit.node.id, title: hit.node.title, likely: c.confidence }
+  return active ? { id: active.id, title: active.title, likely: verdict.isFollowup } : null
+}
+
+/** The notes for the second dialog: all but the suggested one, likeliest first by Jev, then newest. */
+function othersOf(verdict: jev.JevVerdict, keyed: readonly { key: string; node: TreeNode }[], suggested: Suggested | null): TreeNode[] {
+  const prob = verdict.continues?.probabilities ?? {}
+  return keyed
+    .filter(k => k.node.id !== suggested?.id)
+    .map((k, i) => ({ node: k.node, score: prob[k.key] ?? 0, i }))
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map(x => x.node)
 }
 
 /**
@@ -161,28 +209,62 @@ export type Routed = {
  * a confident main_task goes through, anything that might be a note asks.
  * No Jev (no key, an error) → main line, no dialog. A Remote Control (bridge)
  * prompt never gets the dialog: where it would ask, it goes to the main line.
+ *
+ * The dialog offers the note Jev says the prompt continues (else the activeThread);
+ * 〔接在其他便利貼下…〕 opens a second dialog of the other recent notes. In either,
+ * text typed under "Other" is a keyword for the note (findNote); none found, the
+ * prompt goes to the main line and a toast says so.
  */
 export async function routePrompt(p: Ports, opts: Options, prompt: string, via: { remote?: boolean } = {}): Promise<Routed> {
   const sessionId = await p.sessionId()
   const tree = await refresh(p)
   const activeId = tree.activeThread[sessionId] ?? null
-  const activeTitle = activeId === null ? null : (tree.nodes[activeId]?.title ?? null)
-  const r = await jev.classify({ key: await p.keys.typesafe(), fetch: p.fetch, now: p.now }, await jevInput(p, tree, sessionId, prompt))
+  const active = activeId === null ? undefined : tree.nodes[activeId]
+  const keyed = recentNotes(tree, activeId).map((node, i) => ({ key: `n${i + 1}`, node }))
+  const candidates = keyed.map(k => ({ key: k.key, title: k.node.title, question: k.node.question }))
+  const none = { asked: false, choice: null, parentTitle: null }
+  const r = await jev.classify({ key: await p.keys.typesafe(), fetch: p.fetch, now: p.now }, await jevInput(p, tree, sessionId, prompt, candidates))
   if (!r.ok) {
     if (r.reason !== 'no-key') p.ui.log(`sticky-notes: Jev unavailable (${r.reason}${r.status ? ` ${r.status}` : ''}); main line`, 'debug')
-    return { decision: { kind: 'main' }, verdict: null, asked: false, choice: null, activeTitle }
+    return { decision: { kind: 'main' }, verdict: null, ...none }
   }
-  const decision = decide(r.verdict, { route: opts.routeThreshold, followup: opts.followupThreshold })
-  if (decision.kind !== 'ask') return { decision, verdict: r.verdict, asked: false, choice: null, activeTitle }
-  if (via.remote) return { decision: { kind: 'main' }, verdict: r.verdict, asked: false, choice: null, activeTitle }
-  const dialog = askPrompt(r.verdict, { activeTitle, followupThreshold: opts.followupThreshold })
+  const verdict = r.verdict
+  const decision = decide(verdict, { route: opts.routeThreshold, followup: opts.followupThreshold })
+  if (decision.kind !== 'ask') return { decision, verdict, ...none }
+  if (via.remote) return { decision: { kind: 'main' }, verdict, ...none }
+
+  const suggested = suggestionOf(verdict, keyed, active)
+  const others = othersOf(verdict, keyed, suggested)
+  const dialog = askPrompt(verdict, { suggested, hasOthers: others.length > 0, followupThreshold: opts.followupThreshold })
+  const ask = (question: string, labels: string[]) => p.ui.ask(question, labels, 'Sticky Notes')
+  type Got = { choice: AskChoice | null; parent: TreeNode | null }
+  /** Free text under "Other": the note it names, or the main line with a toast. */
+  const byKeyword = (typed: string): Got => {
+    const hit = findNote(tree, typed)
+    if (hit === null) p.ui.toast(`Sticky Notes：找不到「${[...typed].slice(0, 20).join('')}」的便利貼，這句送進主線`)
+    return { choice: hit ? 'followup' : null, parent: hit }
+  }
   try {
-    const answer = await p.ui.ask(dialog.question, dialog.options.map(o => o.label), 'Sticky Notes')
-    const choice = choiceOf(dialog, answer)
-    return { decision: decideFromChoice(choice, r.verdict, tree.tags.length), verdict: r.verdict, asked: true, choice, activeTitle }
+    const answer = await ask(dialog.question, dialog.options.map(o => o.label))
+    const picked = choiceOf(dialog, answer)
+    let got: Got
+    if (picked === 'pick') {
+      const second = pickPrompt(others)
+      const a2 = await ask(second.question, second.options.map(o => o.label))
+      const opt = second.options.find(o => o.label === a2)
+      got = opt === undefined ? byKeyword(a2) : opt.id === null ? { choice: 'main', parent: null } : { choice: 'followup', parent: tree.nodes[opt.id] ?? null }
+    } else if (picked === null) got = byKeyword(answer)
+    else got = { choice: picked, parent: picked === 'followup' && suggested ? (tree.nodes[suggested.id] ?? null) : null }
+    return {
+      decision: decideFromChoice(got.choice, verdict, tree.tags.length, got.parent?.id),
+      verdict,
+      asked: true,
+      choice: got.choice,
+      parentTitle: got.parent?.title ?? null,
+    }
   } catch {
     // dismissed, or headless (-p): never swallow the user's input
-    return { decision: { kind: 'main' }, verdict: r.verdict, asked: true, choice: null, activeTitle }
+    return { decision: { kind: 'main' }, verdict, ...none, asked: true }
   }
 }
 

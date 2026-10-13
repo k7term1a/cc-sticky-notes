@@ -264,6 +264,7 @@ main_turns_since_last_sidebar: <整數>
 | `is_followup` | Noul | 新 prompt 是不是在延續 `active_thread` 的話題 |
 | `needs_project_ctx` | Noul | 回答這題是否需要看到專案的程式碼或對話內容（否 → 可以走 OpenAI） |
 | `tag` | Choice | 動態選項 = `tree.tags` + `__new__`。清單為空時跳過此題 |
+| `continues` | Choice | 動態選項 = 最近 8 張便利貼（本 session 的 activeThread 排第一，其餘依時間由新到舊；以 `n1`…`n8` 代稱，criteria 寫標題與問題前 120 字）+ `none`。沒有便利貼時跳過此題（10/14，R6） |
 
 **決策表**（10/07 改：Jev 不再自動建立便利貼，只決定「要不要問」）
 
@@ -277,9 +278,10 @@ main_turns_since_last_sidebar: <整數>
 
 **對話框**：問題文字帶 Jev 的判斷與信心，例如「這句要怎麼處理？(Jev：知識旁問 96%)」。
 
-- 有 activeThread：〔接在「<activeThread 標題>」下〕〔開新的便利貼〕〔送進主線〕；`is_followup ≥ followupThreshold` 時「接在…下」排第一，否則「開新的便利貼」排第一。
-- 沒有 activeThread：〔開新的便利貼〕〔送進主線〕。
-- 關掉對話框、或在 Other 打字 → 送進主線（不吞掉使用者的話）。
+- 建議追問的便利貼：Jev 的 `continues` 選到的那張；選 `none` 或沒有這題時，用本 session 的 activeThread。有建議時〔接在「<建議>」下〕〔開新的便利貼〕〔送進主線〕，建議的可能性（`continues` 的信心，用 activeThread 時是 `is_followup`）≥ followupThreshold 時「接在…下」排第一，否則「開新的便利貼」排第一。沒有建議時〔開新的便利貼〕〔送進主線〕。
+- 除了建議的那張還有其他便利貼時，第四個選項〔接在其他便利貼下…〕：再跳一個對話框，列出最多 4 張（依 Jev 的 `continues` 機率，其次新到舊），選了就接在那張下面（10/14，R6）。
+- 兩個對話框的「其他」：打的字當關鍵字找便利貼（標題或問題含這個字，取最新的一張），找到就接在它下面；找不到 → 送進主線並跳提示。
+- 關掉任一個對話框 → 送進主線（不吞掉使用者的話）。
 
 使用者選了便利貼：節點的 `route = { label: 'new' | 'followup', confidence: <Jev 的信心>, source: 'ask' }`；`needs_project_ctx ≥ 0.3` 就走 `$.model.fork`（偏保守：寧可多用看得到脈絡的 Claude，少把東西送出去），否則走統整層供應者。`tag` 選到 `__new__` 或信心 < 0.5 → 統整層取名，取到的名字 push 進 `tree.tags`。
 

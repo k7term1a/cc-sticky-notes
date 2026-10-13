@@ -201,7 +201,7 @@ export const register: Register = (on, options) => {
         keep(
           await startNote(p, opts, {
             question: e.text,
-            attach: { kind: d.attach },
+            attach: d.parentId !== undefined ? { kind: 'under', parentId: d.parentId } : { kind: d.attach },
             answerer: d.answerer,
             route: d.route,
             tag: d.tag.kind === 'existing' ? d.tag.tag : undefined,

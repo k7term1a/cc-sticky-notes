@@ -1,18 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { JevVerdict } from '../hooks/jev'
-import {
-  askPrompt,
-  choiceOf,
-  decide,
-  decideFromChoice,
-  decideTag,
-  followupLabel,
-  MAIN_LABEL,
-  NEEDS_CTX_AT,
-  NEW_NOTE_LABEL,
-  PROJECT_QUESTION_CONTEXT,
-} from '../hooks/route'
+import { askPrompt, choiceOf, decide, decideFromChoice, decideTag, followupLabel, MAIN_LABEL, NEEDS_CTX_AT, NEW_NOTE_LABEL, PROJECT_QUESTION_CONTEXT, OTHER_NOTE_LABEL, pickPrompt } from '../hooks/route'
 
 const T = { route: 0.6, followup: 0.6 }
 
@@ -53,28 +42,50 @@ describe('decision table (PLAN.md 決策表): Jev never makes a note by itself',
 
 describe('the dialog', () => {
   test('the question carries Jev’s call and confidence', () => {
-    expect(askPrompt(v('sidebar_knowledge', 0.963), { activeTitle: null, followupThreshold: 0.6 }).question).toBe('這句要怎麼處理？(Jev：知識旁問 96%)')
-    expect(askPrompt(v('main_task', 0.318), { activeTitle: null, followupThreshold: 0.6 }).question).toBe('這句要怎麼處理？(Jev：主線任務 32%)')
+    expect(askPrompt(v('sidebar_knowledge', 0.963), { suggested: null, hasOthers: false, followupThreshold: 0.6 }).question).toBe('這句要怎麼處理？(Jev：知識旁問 96%)')
+    expect(askPrompt(v('main_task', 0.318), { suggested: null, hasOthers: false, followupThreshold: 0.6 }).question).toBe('這句要怎麼處理？(Jev：主線任務 32%)')
+  })
+
+  test('other notes besides the suggested one add 〔接在其他便利貼下…〕 last (four options at most)', () => {
+    const p = askPrompt(v('sidebar_knowledge', 0.9), { suggested: { id: 'a', title: 'A', likely: 0.9 }, hasOthers: true, followupThreshold: 0.6 })
+    expect(p.options.map(o => o.label)).toEqual(['接在「A」下', NEW_NOTE_LABEL, MAIN_LABEL, OTHER_NOTE_LABEL])
+    expect(choiceOf(p, OTHER_NOTE_LABEL)).toBe('pick')
+    const q = askPrompt(v('sidebar_knowledge', 0.9), { suggested: null, hasOthers: true, followupThreshold: 0.6 })
+    expect(q.options.map(o => o.choice)).toEqual(['new', 'main', 'pick'])
+  })
+
+  test('the second dialog: up to four notes, repeated titles numbered, the main line when fewer than two', () => {
+    const notes = ['A', 'B', 'A', 'C', 'D'].map((title, i) => ({ id: `n${i}`, title }))
+    expect(pickPrompt(notes).options).toEqual([
+      { label: '「A」', id: 'n0' },
+      { label: '「B」', id: 'n1' },
+      { label: '「A」(2)', id: 'n2' },
+      { label: '「C」', id: 'n3' },
+    ])
+    expect(pickPrompt([{ id: 'x', title: 'X' }]).options).toEqual([
+      { label: '「X」', id: 'x' },
+      { label: MAIN_LABEL, id: null },
+    ])
   })
 
   test('without an active thread: 〔開新的便利貼〕〔送進主線〕', () => {
-    const p = askPrompt(v('sidebar_knowledge', 0.9), { activeTitle: null, followupThreshold: 0.6 })
+    const p = askPrompt(v('sidebar_knowledge', 0.9), { suggested: null, hasOthers: false, followupThreshold: 0.6 })
     expect(p.options.map(o => o.label)).toEqual([NEW_NOTE_LABEL, MAIN_LABEL])
   })
 
   test('with an active thread, is_followup ≥ threshold puts the follow-up first', () => {
-    const p = askPrompt(v('sidebar_knowledge', 0.9, { isFollowup: 0.6 }), { activeTitle: 'CRDT無衝突', followupThreshold: 0.6 })
+    const p = askPrompt(v('sidebar_knowledge', 0.9), { suggested: { id: 'a', title: 'CRDT無衝突', likely: 0.6 }, hasOthers: false, followupThreshold: 0.6 })
     expect(p.options.map(o => o.label)).toEqual([followupLabel('CRDT無衝突'), NEW_NOTE_LABEL, MAIN_LABEL])
     expect(p.options[0]!.label).toBe('接在「CRDT無衝突」下')
   })
 
   test('with an active thread, is_followup below threshold puts the new note first', () => {
-    const p = askPrompt(v('sidebar_knowledge', 0.9, { isFollowup: 0.59 }), { activeTitle: 'CRDT無衝突', followupThreshold: 0.6 })
+    const p = askPrompt(v('sidebar_knowledge', 0.9), { suggested: { id: 'a', title: 'CRDT無衝突', likely: 0.59 }, hasOthers: false, followupThreshold: 0.6 })
     expect(p.options.map(o => o.choice)).toEqual(['new', 'followup', 'main'])
   })
 
   test('labels map back to choices; free text under "Other" is no choice', () => {
-    const p = askPrompt(v('sidebar_knowledge', 0.9, { isFollowup: 1 }), { activeTitle: 'X', followupThreshold: 0.6 })
+    const p = askPrompt(v('sidebar_knowledge', 0.9), { suggested: { id: 'x', title: 'X', likely: 1 }, hasOthers: false, followupThreshold: 0.6 })
     expect(choiceOf(p, '接在「X」下')).toBe('followup')
     expect(choiceOf(p, NEW_NOTE_LABEL)).toBe('new')
     expect(choiceOf(p, MAIN_LABEL)).toBe('main')

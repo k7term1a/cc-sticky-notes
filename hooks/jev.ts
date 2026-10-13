@@ -9,6 +9,8 @@ export const JEV_MODEL = 'jev-latest'
 
 export type RouteLabel = 'main_task' | 'sidebar_knowledge' | 'project_question'
 export const NEW_TAG = '__new__'
+/** The `continues` answer for "none of the listed notes". */
+export const NO_NOTE = 'none'
 
 /** What the rest of the mod sees: schema-free. */
 export type JevVerdict = {
@@ -19,7 +21,15 @@ export type JevVerdict = {
   needsProjectCtx: number
   /** Absent when there were no tags to choose from. */
   tag?: { label: string; confidence: number }
+  /**
+   * Which listed note the prompt continues: a candidate's key (`n1`…) or NO_NOTE,
+   * with each key's probability when Jev gives them. Absent when none were listed.
+   */
+  continues?: { label: string; confidence: number; probabilities: Record<string, number> }
 }
+
+/** A recent note Jev may say the prompt continues; `key` is how the request names it. */
+export type Candidate = { key: string; title: string; question: string }
 
 export type JevInput = {
   /** Last user prompts (oldest first) and the last assistant reply, raw. */
@@ -30,6 +40,8 @@ export type JevInput = {
   mainTurnsSinceLastSidebar: number
   prompt: string
   tags: string[]
+  /** Recent notes, newest first (notes.ts chooses them); none, no `continues` question. */
+  candidates: Candidate[]
 }
 
 const CLIP = 300
@@ -79,6 +91,12 @@ export function buildRequest(input: JevInput): unknown {
       instructions: "Does answering the new prompt require seeing the project's code or conversation?",
     },
   }
+  if (input.candidates.length > 0) {
+    const criteria: Record<string, string> = {}
+    for (const c of input.candidates) criteria[c.key] = `Continues the sticky note "${c.title}" (last asked: ${clip(c.question, 120)})`
+    criteria[NO_NOTE] = 'Continues none of these notes: a new topic, or not about a sticky note'
+    questions.continues = { type: 'choice', instructions: 'Which existing sticky note does the new prompt follow up?', criteria }
+  }
   if (input.tags.length > 0) {
     const criteria: Record<string, string> = {}
     for (const t of input.tags) criteria[t] = `About ${t}`
@@ -88,7 +106,7 @@ export function buildRequest(input: JevInput): unknown {
   return { model: JEV_MODEL, state: buildState(input), questions }
 }
 
-type ChoiceAnswer = { type: 'choice'; choice: string; confidence: number }
+type ChoiceAnswer = { type: 'choice'; choice: string; confidence: number; probabilities?: Record<string, unknown> }
 type NoulAnswer = { type: 'noul'; noul: number }
 
 const isRoute = (s: unknown): s is RouteLabel =>
@@ -111,6 +129,12 @@ export function parseResponse(body: unknown): JevVerdict | null {
   const tag = answers.tag as ChoiceAnswer | undefined
   if (tag && typeof tag.choice === 'string' && typeof tag.confidence === 'number') {
     verdict.tag = { label: tag.choice, confidence: tag.confidence }
+  }
+  const cont = answers.continues as ChoiceAnswer | undefined
+  if (cont && typeof cont.choice === 'string' && typeof cont.confidence === 'number') {
+    const probabilities: Record<string, number> = {}
+    for (const [k, v] of Object.entries(cont.probabilities ?? {})) if (typeof v === 'number') probabilities[k] = v
+    verdict.continues = { label: cont.choice, confidence: cont.confidence, probabilities }
   }
   return verdict
 }
