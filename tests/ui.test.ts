@@ -157,3 +157,25 @@ test('TEMP /sn ui-gallery opens a pane that draws on terminal and desktop', asyn
     await pane.unmount()
   }
 })
+
+test('TEMP /sn ui-gallery a and b draw the two card plans over sample notes', async ($, on) => {
+  mock.store(on)
+  on('session.id', () => ({ value: 'S1' }))
+  let isOpen = false
+  on('ui.open', () => ((isOpen = true), { value: { isPlaced: true } }))
+  on('ui.close', () => ((isOpen = false), { value: undefined }))
+  on('ui.panes', () => ({ value: isOpen ? [{ id: 'sticky-gallery', title: 'UI Gallery', isShown: true, isFocused: false, isPlaced: true }] : [] }) as never)
+  for (const [plan, title] of [['a', 'a-title:c1'], ['b', 'b-title:r1']] as const) {
+    await $.command.run({ command: 'sn', args: `ui-gallery ${plan}` } as never)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE, requestId: 'sticky-gallery' })
+      expect(await pane.find({ type: 'Text', text: plan === 'a' ? /方案 A/ : /方案 B/ })).toBeDefined()
+      await pane.press({ key: title })
+      expect(await pane.find({ type: 'Button', label: '收合' } as never)).toBeDefined()
+      await pane.press({ key: plan === 'a' ? 'a-close:c1' : 'b-close:r1' })
+      await pane.unmount()
+    }
+  }
+  await $.command.run({ command: 'sn', args: 'ui-gallery b' } as never)
+  expect(isOpen).toBe(false)
+})

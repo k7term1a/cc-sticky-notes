@@ -138,6 +138,10 @@ declare module 'claude-code' {
       lastSampleId: string | null
       /** TEMP /sn ui-gallery: the last press, input or pick, shown at its top. */
       galleryEvent: string
+      /** TEMP /sn ui-gallery [a|b]: the catalog (''), or card plan a or b. */
+      galleryMode: string
+      /** TEMP: the card the prototype has open. */
+      gallerySelected: string | null
     }
   }
 }

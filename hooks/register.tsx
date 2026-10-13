@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
+import { cardsA, cardsB } from './cards'
 import { GALLERY_ID, GALLERY_TITLE, galleryView } from './gallery'
 import { change, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView, statusLine } from './pane'
@@ -21,12 +22,22 @@ const turnsAtSidebarAtom = atom({ plugin: 'cc-sticky-notes', key: 'turnsAtLastSi
 const lastPromptAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastPromptUuid' } as const, null)
 const lastSampleAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastSampleId' } as const, null)
 const galleryEventAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryEvent' } as const, '')
+const galleryModeAtom = atom({ plugin: 'cc-sticky-notes', key: 'galleryMode' } as const, '')
+const gallerySelectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'gallerySelected' } as const, null)
 
-/** TEMP /sn ui-gallery (gallery.tsx): opens or closes the gallery pane; the args of every other command pass. */
+/**
+ * TEMP /sn ui-gallery [a|b] (gallery.tsx, cards.tsx): the catalog, or card plan a or b.
+ * The same view again closes the pane; another switches it. Every other command passes.
+ */
 async function toggleGallery($: EngineInterface, args: string): Promise<boolean> {
-  if (args.trim() !== 'ui-gallery') return false
-  if ((await $.ui.panes()).some(pane => pane.id === GALLERY_ID)) await $.ui.close({ id: GALLERY_ID })
-  else await $.ui.open({ id: GALLERY_ID, title: GALLERY_TITLE })
+  const m = /^ui-gallery(?:\s+([ab]))?$/.exec(args.trim())
+  if (!m) return false
+  const mode = m[1] ?? ''
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === GALLERY_ID)
+  if (isOpen && (await read($, galleryModeAtom)) === mode) return (await $.ui.close({ id: GALLERY_ID }), true)
+  await update($, galleryModeAtom, () => mode)
+  await update($, gallerySelectedAtom, () => null)
+  if (!isOpen) await $.ui.open({ id: GALLERY_ID, title: GALLERY_TITLE })
   return true
 }
 
@@ -205,9 +216,15 @@ export const register: Register = (on, options) => {
   on('command.run', { command: SHORT_COMMAND }, async ($, e) => ((await toggleGallery($, e.args)) ? {} : runCommand(portsOf($), opts, e.args)))
 
   // TEMP /sn ui-gallery
-  on('ui.render', { component: 'Pane', requestId: GALLERY_ID }, async ($, e) =>
-    galleryView($.ui.resolve(e), await read($, galleryEventAtom), { event: what => void update($, galleryEventAtom, () => what) }),
-  )
+  on('ui.render', { component: 'Pane', requestId: GALLERY_ID }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    const event = (what: string) => void update($, galleryEventAtom, () => what)
+    const mode = await read($, galleryModeAtom)
+    if (mode === '') return galleryView(els, await read($, galleryEventAtom), { event })
+    const data = { tree: await read($, treeAtom), selectedId: await read($, gallerySelectedAtom), sessionId: await $.session.id(), pending: await read($, pendingAtom) }
+    const act = { select: (id: string | null) => void update($, gallerySelectedAtom, () => id), event: (what: string) => $.ui.toast(what) }
+    return mode === 'a' ? cardsA(els, data, act) : cardsB(els, data, act)
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const data = {
