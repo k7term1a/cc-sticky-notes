@@ -5,7 +5,8 @@ import type { CommandRunResult } from 'claude-code'
 
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
-import { change, digestNow, digestWords, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { notionProbe } from './notion'
+import { change, confirmDelete, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -13,7 +14,7 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | provider | every | ctx | feedback | calibrate | doctor',
+  description: 'Sticky Notes: open/close the pane, or new | back | rm | timeout | provider | every | ctx | notion | feedback | calibrate | doctor',
   argumentHint: '[new <問題> | back | provider claude|openai | every <n> | ctx [add <文字> | rm <n> | refresh] | feedback … | calibrate]',
 }
 
@@ -80,6 +81,24 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       p.ui.toast(dropReason(rest))
       return {}
     }
+    case 'rm': {
+      // the note the pane has open (its thread runs through it), as ✕ does
+      const id = await p.state.selected()
+      if (id === null || id === '__context__') return { text: '先在 pane 點開要刪的便利貼（或在問題旁按 ✕）' }
+      const n = await confirmDelete(p, opts, id)
+      return n > 0 ? {} : { text: '沒有刪除' }
+    }
+    case 'timeout': {
+      // seconds the Jev dialog waits before the prompt goes to the main line; 0 waits forever
+      if (rest === '') return { text: opts.askTimeout > 0 ? `對話框 ${opts.askTimeout} 秒沒回應就送進主線。調整：/sn timeout <秒>（0 = 一直等）` : '對話框會一直等到你回答。調整：/sn timeout <秒>' }
+      const n = Number(rest)
+      if (!Number.isInteger(n) || n < 0 || n > 600) return { text: '用法：/sn timeout <0–600 的整數秒數>（0 = 一直等）' }
+      const r = await p.setOption('askTimeout', n)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.askTimeout = n
+      p.ui.toast(n > 0 ? `Sticky Notes：對話框 ${n} 秒沒回應就送進主線` : 'Sticky Notes：對話框會一直等')
+      return {}
+    }
     case 'back': {
       const sessionId = await p.sessionId()
       await change(p, t => setActive(t, sessionId, null))
@@ -91,6 +110,29 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       const record = await giveFeedback(p, fb)
       p.ui.toast(record ? `已記下：上一句應該是 ${CHOICE_NAME[record.choice ?? 'main']}` : '這個 session 還沒有可以回饋的路由紀錄')
       return {}
+    }
+    case 'notion': {
+      // /sn notion <collection://… or a database URL>: where the notes sync; /sn notion test: can the mod reach it
+      const [verb = ''] = rest.split(/\s+/)
+      if (verb === 'test') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        return { text: ['Notion 測試：', ...(await notionProbe(p, opts.notionDataSource))].join('\n') }
+      }
+      if (verb === 'pull' || verb === 'push') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        if (verb === 'pull') return { text: `Notion：${await syncPull(p, opts)}` }
+        const r = await syncPushAll(p, opts)
+        return { text: `Notion：上傳 ${r.pushed} 張${r.failed ? `，${r.failed} 張失敗（/sn notion 看原因）` : ''}` }
+      }
+      if (verb === '') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        return { text: `便利貼同步到：${opts.notionDataSource}\n上次：${(await syncStatus(p)) ?? '還沒同步過'}\n指令：/sn notion pull（下載）、/sn notion push（把這個專案還沒上傳的都上傳）、/sn notion test` }
+      }
+      if (!/^collection:\/\/[0-9a-f-]{32,36}$/.test(verb)) return { text: '用法：/sn notion <collection://…> | test | pull | push' }
+      const r = await p.setOption('notionDataSource', verb)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.notionDataSource = verb
+      return { text: '已設定 Notion 資料庫。打 /sn notion test 確認 mod 連得到。' }
     }
     case 'doctor': {
       for (const line of await p.keys.report()) p.ui.log(line)

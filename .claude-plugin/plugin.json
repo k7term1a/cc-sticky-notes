@@ -1,6 +1,6 @@
 {
   "name": "cc-sticky-notes",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "author": {
     "name": "Kai Chi"
   },
@@ -89,6 +89,18 @@
       "title": "Digest every N turns",
       "default": 3,
       "description": "Every this many main turns, the summary layer rewrites this session's main-line digest (what Jev reads) and adds new project facts, in the background; 0 turns it off. Also /sn every <n>."
+    },
+    "notionDataSource": {
+      "type": "string",
+      "title": "Notion data source",
+      "default": "",
+      "description": "collection://… of the Notion database the notes sync to through the claude.ai Notion connector; empty turns the sync off. Also /sn notion <collection://…>."
+    },
+    "askTimeout": {
+      "type": "number",
+      "title": "Dialog timeout (s)",
+      "default": 30,
+      "description": "Seconds the Jev dialog waits before the prompt goes to the main line by itself; 0 waits forever. Also /sn timeout <n>."
     },
     "autoOpenPane": {
       "type": "boolean",

@@ -35,7 +35,8 @@ export type TreeNode = {
   /** Three sentences; null until the summary layer fills it. */
   summary: string | null
   tags: string[]
-  route: { label: string; confidence: number; source: RouteSource }
+  /** `jev`: Jev's route (main_task | sidebar_knowledge | project_question), the card's category; absent when Jev never saw it. */
+  route: { label: string; confidence: number; source: RouteSource; jev?: string }
   promotedAt: number | null
   /** The session it was promoted in (promotion only goes into the current session). */
   promotedIn: string | null

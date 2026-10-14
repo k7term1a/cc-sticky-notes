@@ -162,6 +162,8 @@ PLAN.md 以外、之後可能做的需求。每項寫需求本身、可行性（
 
 ## R5｜透過 Notion 共享便利貼（10/13 提出）
 
+> **10/14 已實作（方向改成多台電腦同步）**：資料庫 `cc-sticky-notes`（collection://8e59b59f-189a-443c-9c5b-083b5766ac70）；答好的便利貼自動上傳，session 開始時下載同專案其他電腦的便利貼；`/sn notion pull|push|test`。auto 權限模式要在 permissions.allow 加四個 Notion 工具。實作在 `hooks/notion.ts`。
+
 > **10/14 探針結果**（PROBE.md〇之七）：`$.tool.list()` 看得到 claude.ai Notion connector 的工具（`notion-create-pages` 等），mod 用得到；實際寫入還沒測。
 
 ### 需求

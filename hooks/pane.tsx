@@ -7,19 +7,19 @@
 //  │ TCP 背壓　10/07 11:01                             │
 //  ╰──────────────────────────────────────────────────╯
 //  ╭──────────────────────────────────────────────────╮   open: the thread as a conversation,
-//  │ 樹載入原因                          10/07 10:41 · 3 │   no Q/A words — the question is a
+//  │ 樹載入原因               [知識旁問] 10/07 10:41 · 3 │   no Q/A words — the question is a
 //  │              ✎ ╭ 為什麼載入便利貼樹要讀… ╮       │   prompt bubble on the right (✎ under
 //  │ <answer>                                         │   the pointer rewrites it), the answer
 //  │ ● 為何全讀節點   ○ 存成一個 JSON                   │   under it; several follow-ups: pick
 //  │              ✎ ╭ 沒看懂，為什麼需要讀取… ╮       │   which one the thread continues by
 //  │ <answer>                                         │
 //  │ [回覆…        ] [↵]                              │   the reply follows up the last answer
-//  │ 結束追問                                          │   on the card this session follows up
 //  ╰──────────────────────────────────────────────────╯
 // The card this session follows up has a green border; every other is plain gray.
 import type { ElementTable, RenderElement, RenderSurface } from 'claude-code'
 
 import type { Tree, TreeNode } from '../types'
+import { ROUTE_NAME } from './route'
 import { pathTo, rootOf } from './tree'
 
 export const PANE_ID = 'sticky'
@@ -116,8 +116,8 @@ export type PaneActions = {
   followUp(parentId: string, question: string): void
   /** A rewritten question: asked again beside the old one (a new topic for a first question). */
   rewrite(nodeId: string, question: string): void
-  /** 結束追問: this session follows up no note any more. */
-  unfollow(): void
+  /** ✕: asks, then deletes this note and the follow-ups under it (this computer only). */
+  remove(nodeId: string): void
   /** R4: the project context card's own edits, and a digest run now. */
   addFact(text: string): void
   removeFact(id: string): void
@@ -125,8 +125,30 @@ export type PaneActions = {
 }
 
 /**
+ * The card's category: what Jev called the first question (the developer, 10/14), in the
+ * dialog's words. Translucent backgrounds, legible on the dark theme and the light one.
+ */
+export const CATEGORY: Record<string, { name: string; color: string }> = {
+  sidebar_knowledge: { name: ROUTE_NAME.sidebar_knowledge, color: '#378ADD40' },
+  project_question: { name: ROUTE_NAME.project_question, color: '#1D9E7540' },
+  main_task: { name: ROUTE_NAME.main_task, color: '#BA751740' },
+}
+
+/** The category as a chip: its own background on Desktop; the terminal has no translucency, so it is dim. */
+function categoryChip(els: ElementTable, surface: RenderSurface, key: string, jev: string | undefined): RenderElement | null {
+  const { Text } = els
+  const c = jev ? CATEGORY[jev] : undefined
+  if (!c) return null
+  return surface === 'terminal' ? (
+    <Text key={key} dimColor>{`[${c.name}]`}</Text>
+  ) : (
+    <Text key={key} backgroundColor={c.color}>{` ${c.name} `}</Text>
+  )
+}
+
+/**
  * The question drawn as the person's own prompt: Desktop's bubble look, on the right,
- * with ✎ beside it while the pointer is over the row (a Box cannot be pressed, and a
+ * with ✎ (ask again) and ✕ (delete) beside it while the pointer is over the row (a Box cannot be pressed, and a
  * Button draws one clipped line, so the bubble itself is not the press). The terminal
  * has no pointer to reveal it: there ✎ is always drawn.
  */
@@ -141,6 +163,7 @@ function bubble(els: ElementTable, surface: RenderSurface, node: TreeNode, act: 
     <Box key={`q:${node.id}`} alignSelf="flex-end" flexDirection="row" alignItems="center" columnGap={1} marginLeft={6} hover={{}}>
       <Box {...(surface === 'terminal' ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}>
         <Button key={`edit:${node.id}`} plain dimColor label="✎" onPress={() => act.edit(node.id)} />
+        <Button key={`remove:${node.id}`} plain dimColor label="✕" onPress={() => act.remove(node.id)} />
       </Box>
       <Box paddingX={1} {...look}>
         <Text>{shownQuestion(node.question)}</Text>
@@ -263,13 +286,18 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
           const n = countAll(tree, id)
           const meta = `${when(root.anchor.at)}${n > 0 ? ` · ${n + 1}` : ''}`
           const frame = following ? { borderColor: 'success' } : { borderDimColor: true }
+          const tag = categoryChip(els, d.surface, `category:${id}`, root.route.jev)
 
           if (!open) {
+            // closed: one line. A Button holds one plain string (no colored part), so the tag is its
+            // own chip between two presses that both open the card: the title, and the time
             return (
-              <Box key={`card:${id}`} borderStyle="round" paddingX={1} {...frame}>
-                {/* closed: the title and its time are one press (a Button holds one string, drawn on
-                    one line: Desktop ignores a newline in it and clips what overflows) */}
-                <Button key={`open:${id}`} plain label={`${root.title}${root.answer === '' && root.promotedAt === null ? ' …' : ''}　${meta}`} onPress={() => act.select(id)} />
+              <Box key={`card:${id}`} flexDirection="row" alignItems="center" columnGap={1} borderStyle="round" paddingX={1} {...frame}>
+                <Box flexGrow={1}>
+                  <Button key={`open:${id}`} plain label={`${root.title}${root.answer === '' && root.promotedAt === null ? ' …' : ''}`} onPress={() => act.select(id)} />
+                </Box>
+                {tag}
+                <Button key={`open-meta:${id}`} plain dimColor label={meta} onPress={() => act.select(id)} />
               </Box>
             )
           }
@@ -287,8 +315,11 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
           }
           return (
             <Box key={`card:${id}`} flexDirection="column" borderStyle="round" paddingX={1} gap={1} {...frame}>
-              <Box justifyContent="space-between">
-                <Button key={`close:${id}`} plain label={root.title} onPress={() => act.select(null)} />
+              <Box flexDirection="row" alignItems="center" columnGap={1}>
+                <Box flexGrow={1}>
+                  <Button key={`close:${id}`} plain label={root.title} onPress={() => act.select(null)} />
+                </Box>
+                {tag}
                 <Text dimColor>{meta}</Text>
               </Box>
               {thread.map((node, i) => {
@@ -329,7 +360,6 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
                   }}
                 />
               )}
-              {following && <Button key={`unfollow:${id}`} plain dimColor label="結束追問" onPress={() => act.unfollow()} />}
             </Box>
           )
         })}

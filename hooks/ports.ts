@@ -24,6 +24,8 @@ export type Ports = {
   now(): Promise<number>
   /** Runs fn outside the current dispatch ($.clock.after(0, fn)). */
   later(fn: () => void): void
+  /** Resolves after ms ($.clock.sleep). */
+  sleep(ms: number): Promise<void>
   store: KV
   fetch(url: string, init?: HttpInit): Promise<HttpResponse>
   fork(prompt: string): Promise<ModelForkResult>
@@ -58,6 +60,7 @@ export type Ports = {
     setLastSampleId(id: string | null): Promise<void>
     /** The node the pane shows. */
     setSelected(id: string | null): Promise<void>
+    selected(): Promise<string | null>
     /** The digest or the project context changed in the store: the pane draws them again. */
     contextChanged(): Promise<void>
     /** R4: a digest run started (`result` null) or ended with `result`, shown on the context card. */
@@ -67,5 +70,12 @@ export type Ports = {
    * This plugin's own userConfig field, as the plugin settings show it: written to
    * settings.json (pluginConfigs) through $.config.set; `deny` when the engine refused.
    */
-  setOption(field: 'summaryProvider' | 'digestEvery', value: string | number): Promise<{ ok: true } | { ok: false; reason: string }>
+  setOption(field: 'summaryProvider' | 'digestEvery' | 'notionDataSource' | 'askTimeout', value: string | number): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** Where this runs, for the Notion rows: the repo's git remote, and the computer's name. */
+  place(): Promise<{ remote: string | null; machine: string }>
+  /** MCP servers the session has (the claude.ai connectors among them), by their tools' names. */
+  mcp: {
+    tools(): Promise<string[]>
+    call(server: string, tool: string, args: Record<string, unknown>): Promise<{ isError: boolean; content: { type: string; text?: string }[] }>
+  }
 }

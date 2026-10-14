@@ -4,7 +4,7 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { change, digestNow, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
@@ -68,6 +68,7 @@ function portsOf($: EngineInterface): Ports {
     },
     now: () => $.clock.now(),
     later: fn => void $.clock.after(0, fn),
+    sleep: ms => $.clock.sleep(ms),
     store: kvOf($),
     // every request that costs a quota is counted as it leaves (usage.ts)
     fetch: async (url, init) => {
@@ -101,13 +102,28 @@ function portsOf($: EngineInterface): Ports {
         ]
       },
     },
+    place: async () => ({
+      remote: (await $.session.repo())?.remote ?? null,
+      machine: (await $.env.get('COMPUTERNAME')) ?? (await $.env.get('HOSTNAME')) ?? (await $.env.get('USER')) ?? 'unknown',
+    }),
+    mcp: {
+      tools: async () => (await $.tool.list()).filter(t => t.mcp).map(t => t.name),
+      call: async (server, tool, args) => {
+        const r = await $.mcp.call(server, tool, args)
+        return { isError: r.isError, content: r.content as { type: string; text?: string }[] }
+      },
+    },
     setOption: async (field, value) => {
       try {
         // the row of this plugin's own field: `cc-sticky-notes.<field>` (or `cc-sticky-notes@inline.<field>`)
+        // kept in this machine's store too, applied at session.start (applyOptionOverrides): a
+        // --plugin-dir mod's fields are not rows of /config (seen 10/14), so that is the one that holds
+        await $.store.set(optionKey(field), value)
         const row = (await $.config.list()).find(r => /^cc-sticky-notes(@[^.]+)?\./.test(r.key) && r.key.endsWith(`.${field}`))
-        if (!row) return { ok: false, reason: `找不到 ${field} 這個設定` }
+        if (!row) return { ok: true }
         const r = await $.config.set({ key: row.key, value: value as never })
-        return r.deny !== undefined ? { ok: false, reason: r.deny } : { ok: true }
+        if (r.deny !== undefined) $.ui.log(`sticky-notes: /config kept ${field} as it was (${r.deny}); this machine's own setting stands`, { to: 'debug' })
+        return { ok: true }
       } catch (err) {
         return { ok: false, reason: String(err).slice(0, 200) }
       }
@@ -141,6 +157,7 @@ function portsOf($: EngineInterface): Ports {
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
+      selected: () => read($, selectedAtom),
       contextChanged: async () => void (await update($, contextRevAtom, n => n + 1)),
       setDigestStatus: async (running, result) =>
         void (await update($, digestStatusAtom, s => (running ? { ...s, running: true } : { running: false, at: Date.now(), result }))),
@@ -181,12 +198,6 @@ async function editFacts($: EngineInterface, edit: (facts: ContextFact[]) => Con
   await p.state.contextChanged()
 }
 
-/** 結束追問 on the green card: this session follows up no note. */
-async function unfollow($: EngineInterface) {
-  const p = portsOf($)
-  const sessionId = await p.sessionId()
-  await change(p, t => setActive(t, sessionId, null))
-}
 
 /**
  * ✎: a rewritten question is asked again beside the old one — a new follow-up of the
@@ -218,9 +229,13 @@ export const register: Register = (on, options) => {
   const opts = readOptions(options)
 
   on('session.start', async ($, e, next) => {
+    await applyOptionOverrides(kvOf($), opts)
     await $.command.register(COMMAND_SPEC)
     await $.command.register(SHORT_COMMAND_SPEC)
-    await prepare(portsOf($))
+    const p = portsOf($)
+    await prepare(p)
+    // the notes other computers made in this project (Notion), in the background
+    if (opts.notionDataSource !== '') p.later(() => void syncPull(p, opts))
     return next(e)
   })
 
@@ -313,7 +328,7 @@ export const register: Register = (on, options) => {
       edit: id => void update($, editingAtom, () => id),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
       rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
-      unfollow: () => void unfollow($),
+      remove: nodeId => void confirmDelete(portsOf($), opts, nodeId),
       addFact: text =>
         void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
       removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),

@@ -7,14 +7,15 @@ import type { AskChoice, FeedbackRecord, Tree, TreeNode } from '../types'
 import { answerSide } from './answer'
 import { digestDue, FACTS_FOR_JEV, lastExchanges, readDigest, readFacts, runDigest } from './context'
 import { titleAndSummary } from './digest'
-import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
+import { getRecord, listRecords, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
+import { markUnsynced, pullNotes, pushNote, type SyncPorts } from './notion'
 import type { Ports } from './ports'
 import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
-import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, pickPrompt, type Decision, type Suggested } from './route'
-import { addNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
+import { askPrompt, choiceOf, decide, decideFromChoice, MAIN_LABEL, NEEDS_CTX_AT, pickPrompt, type Decision, type Suggested } from './route'
+import { addNode, removeNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
   routeThreshold: number
@@ -28,6 +29,10 @@ export type Options = {
   autoOpenPane: boolean
   /** R4: the main-line digest and the project context every this many main turns; 0 turns them off. */
   digestEvery: number
+  /** The Notion data source the notes sync to (collection://…); '' turns the sync off. */
+  notionDataSource: string
+  /** Seconds the dialog waits before the prompt goes to the main line by itself; 0 waits forever. */
+  askTimeout: number
 }
 
 export function readOptions(o: PluginOptions): Options {
@@ -43,8 +48,26 @@ export function readOptions(o: PluginOptions): Options {
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
     autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
+    notionDataSource: typeof o.notionDataSource === 'string' ? o.notionDataSource.trim() : '',
+    askTimeout: Math.max(0, Math.floor(num(o.askTimeout, 30))), // 30 s (the developer, 10/14)
     digestEvery: Math.max(0, Math.floor(num(o.digestEvery, 3))), // every 3 turns (the developer's pick, 10/14)
   }
+}
+
+/** What /sn provider, /sn every and /sn notion set, kept per machine in $.store over the plugin settings. */
+export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource', 'askTimeout'] as const
+export const optionKey = (field: (typeof OVERRIDABLE)[number]) => 'option:' + field
+
+/** Puts this machine's own settings (optionKey) over the plugin's, in place. */
+export async function applyOptionOverrides(kv: { get(key: string): Promise<unknown> }, opts: Options): Promise<void> {
+  const provider = await kv.get(optionKey('summaryProvider'))
+  if (provider === 'claude' || provider === 'openai') opts.summaryProvider = provider
+  const every = await kv.get(optionKey('digestEvery'))
+  if (typeof every === 'number' && Number.isInteger(every) && every >= 0) opts.digestEvery = every
+  const notion = await kv.get(optionKey('notionDataSource'))
+  if (typeof notion === 'string') opts.notionDataSource = notion
+  const timeout = await kv.get(optionKey('askTimeout'))
+  if (typeof timeout === 'number' && Number.isInteger(timeout) && timeout >= 0) opts.askTimeout = timeout
 }
 
 /** The configured summary provider; openai without a key falls back to claude with one toast. */
@@ -70,10 +93,39 @@ export async function refresh(p: Ports): Promise<Tree> {
   return tree
 }
 
-/** session.start: move a tree saved in the old one-key layout, then load. */
+/**
+ * The project_question bookmarks the mod kept until 10/12 (「這題在主線回答」): no answer,
+ * promoted at creation. The developer asked them gone (10/14); nothing makes them any more.
+ */
+export function isMainLineBookmark(n: TreeNode): boolean {
+  return n.promotedAt !== null && n.answer === '' && n.route.label === 'project_question' && n.children.length === 0
+}
+
+/** session.start: move a tree saved in the old one-key layout, drop the old bookmarks, then load. */
 export async function prepare(p: Ports): Promise<Tree> {
-  const moved = await migrateLegacy(p.store, await projectKey(p))
+  const root = await projectKey(p)
+  const moved = await migrateLegacy(p.store, root)
   if (moved > 0) p.ui.log(`sticky-notes: moved ${moved} notes to the per-node store layout`, 'debug')
+  const tree = await loadTree(p.store, root)
+  const bookmarks = Object.values(tree.nodes).filter(isMainLineBookmark)
+  if (bookmarks.length > 0) {
+    await mutateTree(p.store, root, t => bookmarks.reduce((acc, n) => removeNode(acc, n.id), t))
+    p.ui.log(`sticky-notes: removed ${bookmarks.length} old 在主線回答 bookmarks`, 'debug')
+  }
+  // notes made before the card showed Jev's call: it is in their feedback record
+  const unknown = Object.values(tree.nodes).filter(n => n.route.jev === undefined && n.route.source !== 'manual')
+  if (unknown.length > 0) {
+    const byNode = new Map<string, string>()
+    for (const r of await listRecords(p.store, root)) if (r.nodeId) byNode.set(r.nodeId, r.jev.route)
+    const found = unknown.filter(n => byNode.has(n.id))
+    if (found.length > 0) {
+      await mutateTree(p.store, root, t => {
+        const nodes = { ...t.nodes }
+        for (const n of found) if (nodes[n.id]) nodes[n.id] = { ...nodes[n.id]!, route: { ...nodes[n.id]!.route, jev: byNode.get(n.id) } }
+        return { ...t, nodes }
+      })
+    }
+  }
   return refresh(p)
 }
 
@@ -211,6 +263,9 @@ function othersOf(verdict: jev.JevVerdict, keyed: readonly { key: string; node: 
     .map(x => x.node)
 }
 
+/** What the dialog race answers when askTimeout passed first (no label can be this). */
+const TIMED_OUT = '\u0000timed-out'
+
 /**
  * Jev, then the decision table (route.ts). Jev never makes a note by itself:
  * a confident main_task goes through, anything that might be a note asks.
@@ -243,7 +298,24 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string, via: 
   const suggested = suggestionOf(verdict, keyed, active)
   const others = othersOf(verdict, keyed, suggested)
   const dialog = askPrompt(verdict, { suggested, hasOthers: others.length > 0, followupThreshold: opts.followupThreshold })
-  const ask = (question: string, labels: string[]) => p.ui.ask(question, labels, 'Sticky Notes')
+  /**
+   * The dialog, raced by askTimeout: unanswered by then, the prompt goes to the main line
+   * (TIMED_OUT). A mod cannot take an asked dialog down, so it stays on screen; a pick
+   * made in it afterwards changes nothing and says so.
+   */
+  const ask = async (question: string, labels: string[]): Promise<string> => {
+    const asked = p.ui.ask(question, labels, 'Sticky Notes')
+    if (opts.askTimeout <= 0) return asked
+    let late = false
+    const timer = p.sleep(opts.askTimeout * 1000).then(() => ((late = true), TIMED_OUT))
+    asked.then(
+      a => void (late && labels.includes(a) && a !== MAIN_LABEL && p.ui.toast('Sticky Notes：這句已經逾時送進主線了，這次的選擇沒有作用')),
+      () => {},
+    )
+    const first = await Promise.race([asked, timer])
+    if (first === TIMED_OUT) p.ui.toast(`Sticky Notes：${opts.askTimeout} 秒沒有回應，這句送進主線`)
+    return first
+  }
   type Got = { choice: AskChoice | null; parent: TreeNode | null }
   /** Free text under "Other": the note it names, or the main line with a toast. */
   const byKeyword = (typed: string): Got => {
@@ -253,11 +325,13 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string, via: 
   }
   try {
     const answer = await ask(dialog.question, dialog.options.map(o => o.label))
+    if (answer === TIMED_OUT) return { decision: { kind: 'main' }, verdict, ...none, asked: true }
     const picked = choiceOf(dialog, answer)
     let got: Got
     if (picked === 'pick') {
       const second = pickPrompt(others)
       const a2 = await ask(second.question, second.options.map(o => o.label))
+      if (a2 === TIMED_OUT) return { decision: { kind: 'main' }, verdict, ...none, asked: true }
       const opt = second.options.find(o => o.label === a2)
       got = opt === undefined ? byKeyword(a2) : opt.id === null ? { choice: 'main', parent: null } : { choice: 'followup', parent: tree.nodes[opt.id] ?? null }
     } else if (picked === null) got = byKeyword(answer)
@@ -368,7 +442,7 @@ export type NoteRequest = {
   question: string
   attach: Attach
   answerer: 'fork' | 'summary-provider'
-  route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }
+  route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual'; jev?: string }
   tag?: string
 }
 
@@ -401,7 +475,8 @@ export async function startNote(p: Ports, opts: Options, req: NoteRequest): Prom
         anchor,
         route: req.route,
         answeredBy: req.answerer === 'fork' ? 'claude-fork' : opts.summaryProvider,
-        tags: req.tag ? [req.tag] : [],
+        // the tag is the topic's: on a first question only (answerNote names one when Jev gave none)
+        tags: req.tag && req.attach.kind === 'root' ? [req.tag] : [],
       },
       req.attach,
     ).tree,
@@ -444,7 +519,96 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     p.ui.log(`cc-sticky-note ${ts.title}：${plainPreview(ts.summary ?? a.text, PREVIEW_CHARS)}　/sn 看完整答案`)
     p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
+    // the answered note goes to Notion for the other computers, in the background
+    if (opts.notionDataSource !== '') p.later(() => void syncPush(p, opts, id))
   } finally {
     await p.state.addPending(-1)
   }
+}
+
+const syncPorts = (p: Ports): SyncPorts => ({ ...p, projectKey: () => projectKey(p) })
+const syncStatusKey = async (p: Ports) => `notion-status:${await projectKey(p)}`
+
+/**
+ * Deletes a note and the follow-ups under it, here only (the developer, 10/14). Their
+ * Notion rows, if any, are marked 不同步 so no other computer pulls them from now on;
+ * the notion:<root>:<id> keys stay, so this computer never pulls them back either.
+ */
+export async function deleteNote(p: Ports, opts: Options, id: string): Promise<number> {
+  const before = await refresh(p)
+  if (!before.nodes[id]) return 0
+  const gone: string[] = []
+  const walk = (nid: string) => {
+    gone.push(nid)
+    for (const c of before.nodes[nid]?.children ?? []) walk(c)
+  }
+  walk(id)
+  const parent = before.nodes[id]!.parentId
+  await change(p, t => removeNode(t, id))
+  const selected = await p.state.selected()
+  if (selected !== null && gone.includes(selected)) await p.state.setSelected(parent)
+  if (opts.notionDataSource !== '') p.later(() => void markUnsynced(syncPorts(p), opts.notionDataSource, gone))
+  return gone.length
+}
+
+/** ✕ and /sn rm: the dialog first (how much goes), then deleteNote. Dismissed, nothing goes. */
+export async function confirmDelete(p: Ports, opts: Options, id: string): Promise<number> {
+  const tree = await refresh(p)
+  const node = tree.nodes[id]
+  if (!node) return 0
+  let below = 0
+  const count = (nid: string) => (tree.nodes[nid]?.children ?? []).forEach(c => (below++, count(c)))
+  count(id)
+  const what = `「${node.title}」${below > 0 ? `和它底下 ${below} 則追問` : ''}`
+  try {
+    const a = await p.ui.ask(`刪除${what}？只刪這台電腦的，Notion 上會標成不同步。`, ['刪除', '取消'], 'Sticky Notes')
+    if (a !== '刪除') return 0
+  } catch {
+    return 0
+  }
+  const n = await deleteNote(p, opts, id)
+  p.ui.toast(`Sticky Notes：已刪除${what}`)
+  return n
+}
+
+/** One note to Notion; how it went is kept for /sn notion. */
+export async function syncPush(p: Ports, opts: Options, id: string): Promise<string> {
+  const node = (await refresh(p)).nodes[id]
+  if (!node) return 'gone'
+  const r = await pushNote(syncPorts(p), opts.notionDataSource, node)
+  if (r !== 'pushed' && r !== 'skipped') {
+    p.ui.log(`sticky-notes: Notion push failed (${r})`, 'debug')
+    await p.store.set(await syncStatusKey(p), `上傳失敗：${r}`)
+  }
+  return r
+}
+
+/** /sn notion push: every answered note of this project not yet in Notion. */
+export async function syncPushAll(p: Ports, opts: Options): Promise<{ pushed: number; failed: number }> {
+  const tree = await refresh(p)
+  let pushed = 0
+  let failed = 0
+  for (const node of Object.values(tree.nodes).sort((a, b) => a.anchor.at - b.anchor.at)) {
+    const r = await pushNote(syncPorts(p), opts.notionDataSource, node)
+    if (r === 'pushed') pushed++
+    else if (r !== 'skipped') failed++
+  }
+  await p.store.set(await syncStatusKey(p), `上傳 ${pushed} 張${failed ? `，${failed} 張失敗` : ''}（${new Date(await p.now()).toLocaleString()}）`)
+  return { pushed, failed }
+}
+
+/** The other computers' notes of this project into the tree; a toast when any came. */
+export async function syncPull(p: Ports, opts: Options): Promise<string> {
+  const r = await pullNotes(syncPorts(p), opts.notionDataSource, fn => change(p, fn), await refresh(p))
+  const text = 'error' in r ? `下載失敗：${r.error}` : `下載 ${r.added} 張`
+  await p.store.set(await syncStatusKey(p), `${text}（${new Date(await p.now()).toLocaleString()}）`)
+  if ('error' in r) p.ui.log(`sticky-notes: Notion pull failed (${r.error})`, 'debug')
+  else if (r.added > 0) p.ui.toast(`Sticky Notes：從其他電腦同步了 ${r.added} 張便利貼`)
+  return text
+}
+
+/** The last sync's outcome, for /sn notion. */
+export async function syncStatus(p: Ports): Promise<string | null> {
+  const s = await p.store.get(await syncStatusKey(p))
+  return typeof s === 'string' ? s : null
 }
