@@ -5,6 +5,7 @@ import type { CommandRunResult } from 'claude-code'
 
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
+import { notionProbe } from './notion'
 import { change, digestNow, digestWords, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
@@ -91,6 +92,20 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       const record = await giveFeedback(p, fb)
       p.ui.toast(record ? `已記下：上一句應該是 ${CHOICE_NAME[record.choice ?? 'main']}` : '這個 session 還沒有可以回饋的路由紀錄')
       return {}
+    }
+    case 'notion': {
+      // /sn notion <collection://… or a database URL>: where the notes sync; /sn notion test: can the mod reach it
+      const [verb = ''] = rest.split(/\s+/)
+      if (verb === 'test') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        return { text: ['Notion 測試：', ...(await notionProbe(p, opts.notionDataSource))].join('\n') }
+      }
+      if (verb === '') return { text: opts.notionDataSource ? `便利貼同步到：${opts.notionDataSource}` : '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+      if (!/^collection:\/\/[0-9a-f-]{32,36}$/.test(verb)) return { text: '用法：/sn notion <collection://…>（資料庫的 data source 網址），或 /sn notion test' }
+      const r = await p.setOption('notionDataSource', verb)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.notionDataSource = verb
+      return { text: '已設定 Notion 資料庫。打 /sn notion test 確認 mod 連得到。' }
     }
     case 'doctor': {
       for (const line of await p.keys.report()) p.ui.log(line)

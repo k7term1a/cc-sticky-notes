@@ -5,6 +5,7 @@ import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
+import { notionServer } from '../hooks/notion'
 import { digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
@@ -99,6 +100,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       usage,
     }),
     setOption: async (field, value) => ((options[field] = value), { ok: true }),
+    mcp: { tools: async () => [], call: async () => ({ isError: true, content: [] }) },
     keys: { typesafe: async () => opts.typesafeKey, openai: async () => opts.openaiKey, report: async () => [] },
     ui: {
       log: t => void logs.push(t),
@@ -571,5 +573,22 @@ describe('the drop line and the log preview', () => {
     expect(explainDrop(long, { decision: note('root'), verdict: v(0.9), asked: true, choice: 'new', parentTitle: null })).toBe(
       `cc-sticky-note：新的便利貼「${[...long].slice(0, 24).join('')}…」`,
     )
+  })
+})
+
+describe('Notion sync: finding the connector', () => {
+  test('the server is the part of a notion-fetch tool name between mcp__ and __', () => {
+    expect(notionServer(['mcp__x__other', 'mcp__c20941de-f53b-4587-a934-6b80ec468eea__notion-fetch'])).toBe('c20941de-f53b-4587-a934-6b80ec468eea')
+    expect(notionServer(['mcp__x__other'])).toBeNull()
+  })
+
+  test('/sn notion takes a collection:// URL into the setting; test needs one first', async () => {
+    const f = fake()
+    const o = readOptions({})
+    expect(await runCommand(f.ports, o, 'notion test')).toMatchObject({ text: expect.stringContaining('還沒設定') })
+    expect(await runCommand(f.ports, o, 'notion https://example.com')).toMatchObject({ text: expect.stringContaining('用法') })
+    await runCommand(f.ports, o, 'notion collection://8e59b59f-189a-443c-9c5b-083b5766ac70')
+    expect(f.options.notionDataSource).toBe('collection://8e59b59f-189a-443c-9c5b-083b5766ac70')
+    expect(await runCommand(f.ports, o, 'notion test')).toMatchObject({ text: expect.stringContaining('找不到 Notion connector') })
   })
 })

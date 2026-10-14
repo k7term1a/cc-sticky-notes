@@ -90,6 +90,12 @@
       "default": 3,
       "description": "Every this many main turns, the summary layer rewrites this session's main-line digest (what Jev reads) and adds new project facts, in the background; 0 turns it off. Also /sn every <n>."
     },
+    "notionDataSource": {
+      "type": "string",
+      "title": "Notion data source",
+      "default": "",
+      "description": "collection://… of the Notion database the notes sync to through the claude.ai Notion connector; empty turns the sync off. Also /sn notion <collection://…>."
+    },
     "autoOpenPane": {
       "type": "boolean",
       "title": "Auto-open pane",

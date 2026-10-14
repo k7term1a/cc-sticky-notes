@@ -28,6 +28,8 @@ export type Options = {
   autoOpenPane: boolean
   /** R4: the main-line digest and the project context every this many main turns; 0 turns them off. */
   digestEvery: number
+  /** The Notion data source the notes sync to (collection://…); '' turns the sync off. */
+  notionDataSource: string
 }
 
 export function readOptions(o: PluginOptions): Options {
@@ -43,6 +45,7 @@ export function readOptions(o: PluginOptions): Options {
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
     autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
+    notionDataSource: typeof o.notionDataSource === 'string' ? o.notionDataSource.trim() : '',
     digestEvery: Math.max(0, Math.floor(num(o.digestEvery, 3))), // every 3 turns (the developer's pick, 10/14)
   }
 }

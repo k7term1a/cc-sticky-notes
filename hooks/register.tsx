@@ -101,6 +101,13 @@ function portsOf($: EngineInterface): Ports {
         ]
       },
     },
+    mcp: {
+      tools: async () => (await $.tool.list()).filter(t => t.mcp).map(t => t.name),
+      call: async (server, tool, args) => {
+        const r = await $.mcp.call(server, tool, args)
+        return { isError: r.isError, content: r.content as { type: string; text?: string }[] }
+      },
+    },
     setOption: async (field, value) => {
       try {
         // the row of this plugin's own field: `cc-sticky-notes.<field>` (or `cc-sticky-notes@inline.<field>`)

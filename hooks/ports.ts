@@ -67,5 +67,10 @@ export type Ports = {
    * This plugin's own userConfig field, as the plugin settings show it: written to
    * settings.json (pluginConfigs) through $.config.set; `deny` when the engine refused.
    */
-  setOption(field: 'summaryProvider' | 'digestEvery', value: string | number): Promise<{ ok: true } | { ok: false; reason: string }>
+  setOption(field: 'summaryProvider' | 'digestEvery' | 'notionDataSource', value: string | number): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** MCP servers the session has (the claude.ai connectors among them), by their tools' names. */
+  mcp: {
+    tools(): Promise<string[]>
+    call(server: string, tool: string, args: Record<string, unknown>): Promise<{ isError: boolean; content: { type: string; text?: string }[] }>
+  }
 }
