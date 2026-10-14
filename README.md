@@ -112,6 +112,22 @@ OPENAI_API_KEY=sk-...
 
 兩者都在 pane 最下面的「專案脈絡」卡片：可以看、用 ✕ 刪、自己加一條，或按「立即統整」。用 OpenAI 時，送出去的對話會先依 `openaiContextMode` 剝掉程式碼、路徑等內容。每次統整大約 2–4k token，會算進狀態列的今日用量。
 
+### 在多台電腦之間同步（Notion，選用）
+
+每台電腦的便利貼可以同步到你自己 Notion 裡的一個資料庫：答好的便利貼自動上傳一列；session 開始時把其他電腦在**同一個專案**做的便利貼拉下來（專案用 git remote 對應，路徑不同也沒關係）。走的是你在 claude.ai 連好的 Notion connector，mod 不存任何 token。
+
+1. 在 Notion 建一個資料庫，欄位：標題（title）、問題、摘要、Note ID、上一層（文字）、專案、電腦、回答者（select）、建立時間（date）。
+2. 在 `~/.claude/settings.json` 的 `permissions.allow` 加上 Notion connector 的四個工具：`notion-fetch`、`notion-query-data-sources`、`notion-create-pages`、`notion-update-page`（完整名稱是 `mcp__<connector id>__notion-fetch` 這種形式，`/sn notion test` 會印出 connector id）。沒加的話，auto 權限模式會擋下 mod 的呼叫。
+3. 每台電腦各打一次 `/sn notion <collection://…>`，再打 `/sn notion test` 確認四步都 ✓。
+
+| 指令 | 作用 |
+| --- | --- |
+| `/sn notion` | 看同步到哪、上次同步的結果 |
+| `/sn notion pull` | 現在就下載其他電腦的便利貼 |
+| `/sn notion push` | 把這個專案還沒上傳的便利貼全部上傳（第一次設定時用） |
+
+只會新增，不會合併同一張便利貼的修改。
+
 ### 指令
 
 `/sn` 和 `/sticky-note` 完全一樣，`/sn` 比較好打。

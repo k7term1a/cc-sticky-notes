@@ -68,6 +68,8 @@ export type Ports = {
    * settings.json (pluginConfigs) through $.config.set; `deny` when the engine refused.
    */
   setOption(field: 'summaryProvider' | 'digestEvery' | 'notionDataSource', value: string | number): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** Where this runs, for the Notion rows: the repo's git remote, and the computer's name. */
+  place(): Promise<{ remote: string | null; machine: string }>
   /** MCP servers the session has (the claude.ai connectors among them), by their tools' names. */
   mcp: {
     tools(): Promise<string[]>

@@ -6,7 +6,7 @@ import type { CommandRunResult } from 'claude-code'
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
 import { notionProbe } from './notion'
-import { change, digestNow, digestWords, dropReason, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { change, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -100,8 +100,17 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
         if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
         return { text: ['Notion 測試：', ...(await notionProbe(p, opts.notionDataSource))].join('\n') }
       }
-      if (verb === '') return { text: opts.notionDataSource ? `便利貼同步到：${opts.notionDataSource}` : '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
-      if (!/^collection:\/\/[0-9a-f-]{32,36}$/.test(verb)) return { text: '用法：/sn notion <collection://…>（資料庫的 data source 網址），或 /sn notion test' }
+      if (verb === 'pull' || verb === 'push') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        if (verb === 'pull') return { text: `Notion：${await syncPull(p, opts)}` }
+        const r = await syncPushAll(p, opts)
+        return { text: `Notion：上傳 ${r.pushed} 張${r.failed ? `，${r.failed} 張失敗（/sn notion 看原因）` : ''}` }
+      }
+      if (verb === '') {
+        if (opts.notionDataSource === '') return { text: '還沒設定 Notion 資料庫：/sn notion <collection://…>' }
+        return { text: `便利貼同步到：${opts.notionDataSource}\n上次：${(await syncStatus(p)) ?? '還沒同步過'}\n指令：/sn notion pull（下載）、/sn notion push（把這個專案還沒上傳的都上傳）、/sn notion test` }
+      }
+      if (!/^collection:\/\/[0-9a-f-]{32,36}$/.test(verb)) return { text: '用法：/sn notion <collection://…> | test | pull | push' }
       const r = await p.setOption('notionDataSource', verb)
       if (!r.ok) return { text: `沒有改成功：${r.reason}` }
       opts.notionDataSource = verb

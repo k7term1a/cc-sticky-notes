@@ -5,8 +5,8 @@ import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
-import { notionServer } from '../hooks/notion'
-import { applyOptionOverrides, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { notionServer, projectName } from '../hooks/notion'
+import { applyOptionOverrides, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -36,7 +36,11 @@ type Fake = {
 }
 
 /** A Ports with everything in memory; Jev answers from `jev`, the fork echoes. */
-function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string | string[] } = {}): Fake {
+/** A Notion database in memory, shared by fakes that stand for two computers. */
+type FakeNotion = { rows: Record<string, unknown>[]; bodies: Map<string, string> }
+const newNotion = (): FakeNotion => ({ rows: [], bodies: new Map() })
+
+function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string | string[]; notion?: FakeNotion; machine?: string; remote?: string | null } = {}): Fake {
   const mem = new Map<string, string>()
   const kv: KV = {
     get: async k => (mem.has(k) ? JSON.parse(mem.get(k)!) : undefined),
@@ -100,7 +104,29 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       usage,
     }),
     setOption: async (field, value) => ((options[field] = value), { ok: true }),
-    mcp: { tools: async () => [], call: async () => ({ isError: true, content: [] }) },
+    place: async () => ({ remote: opts.remote === undefined ? 'git@github.com:me/proj.git' : opts.remote, machine: opts.machine ?? 'HOME' }),
+    mcp: {
+      tools: async () => (opts.notion ? ['mcp__srv__notion-fetch', 'mcp__srv__notion-create-pages'] : []),
+      call: async (server, tool, args) => {
+        const db = opts.notion
+        if (!db || server !== 'srv') return { isError: true, content: [{ type: 'text', text: 'no server' }] }
+        const text = (t: string) => ({ isError: false, content: [{ type: 'text', text: t }] })
+        if (tool === 'notion-create-pages') {
+          const page = (args.pages as { properties: Record<string, unknown>; content: string }[])[0]!
+          const url = `https://app.notion.com/p/${db.rows.length + 1}`
+          db.rows.push({ ...page.properties, url })
+          db.bodies.set(url, page.content)
+          return text(`Created page ${url}`)
+        }
+        if (tool === 'notion-query-data-sources') {
+          const filters = ((args.data as { filter: { filters: { property: string; value: { value: string } }[] } }).filter.filters)
+          const project = filters.find(x => x.property === '專案')!.value.value
+          return text(JSON.stringify({ results: db.rows.filter(r => r['專案'] === project), has_more: false }))
+        }
+        if (tool === 'notion-fetch') return text(JSON.stringify({ text: `<page>\n<content>\n${db.bodies.get(String(args.id)) ?? ''}\n</content>\n</page>` }))
+        return { isError: true, content: [] }
+      },
+    },
     keys: { typesafe: async () => opts.typesafeKey, openai: async () => opts.openaiKey, report: async () => [] },
     ui: {
       log: t => void logs.push(t),
@@ -603,5 +629,52 @@ describe('per-machine settings (/sn provider, every, notion)', () => {
     const o = readOptions({ summaryProvider: 'claude', digestEvery: 3 })
     await applyOptionOverrides(f.kv, o)
     expect([o.summaryProvider, o.digestEvery, o.notionDataSource]).toEqual(['openai', 0, 'collection://8e59b59f-189a-443c-9c5b-083b5766ac70'])
+  })
+})
+
+describe('Notion sync between computers', () => {
+  test('a project is named by its git remote, the same on every computer', () => {
+    expect(projectName('git@github.com:K7term1a/cc-sticky-notes.git', 'c:/x')).toBe('github.com/k7term1a/cc-sticky-notes')
+    expect(projectName('https://github.com/k7term1a/cc-sticky-notes.git', '/Users/kaichi/cc-sticky-notes')).toBe('github.com/k7term1a/cc-sticky-notes')
+    expect(projectName(null, 'c:/Users/kay13/desktop/proj')).toBe('proj')
+  })
+
+  test('home answers and pushes a thread; the laptop pulls it in once, follow-up under its parent', async () => {
+    const notion = newNotion()
+    const o = { ...readOptions({}), notionDataSource: 'collection://8e59b59f-189a-443c-9c5b-083b5766ac70' }
+    const home = fake({ notion, machine: 'HOME' })
+    const root = await startNote(home.ports, o, { question: 'CRDT 是什麼？', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await home.runLater()
+    const child = await startNote(home.ports, o, { question: '衝突怎麼合併？', attach: { kind: 'under', parentId: root }, answerer: 'fork', route: { label: 'followup', confidence: 1, source: 'manual' } })
+    await home.runLater()
+    expect(notion.rows.map(r => [r['Note ID'], r['上一層'], r['專案'], r['電腦']])).toEqual([
+      [root, '', 'github.com/me/proj', 'HOME'],
+      [child, root, 'github.com/me/proj', 'HOME'],
+    ])
+    // a second push of the same notes writes nothing
+    expect(await syncPushAll(home.ports, o)).toEqual({ pushed: 0, failed: 0 })
+
+    const laptop = fake({ notion, machine: 'MAC' })
+    expect(await syncPull(laptop.ports, o)).toMatch(/^下載 2 張/)
+    const t = await laptop.tree()
+    expect(t.nodes[child]?.parentId).toBe(root)
+    expect(t.nodes[root]?.answer).toBe('answer #1')
+    expect(t.nodes[root]?.title).toBe('標題')
+    expect(laptop.toasts.some(x => x.includes('同步了 2 張'))).toBe(true)
+    // pulled again: nothing new, and the pulled notes are not pushed back
+    expect(await syncPull(laptop.ports, o)).toMatch(/^下載 0 張/)
+    expect(await syncPushAll(laptop.ports, o)).toEqual({ pushed: 0, failed: 0 })
+    expect(notion.rows).toHaveLength(2)
+    // another project's rows stay out
+    const other = fake({ notion, machine: 'MAC', remote: 'git@github.com:me/other.git' })
+    expect(await syncPull(other.ports, o)).toMatch(/^下載 0 張/)
+  })
+
+  test('without a data source nothing is sent', async () => {
+    const notion = newNotion()
+    const home = fake({ notion })
+    await startNote(home.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await home.runLater()
+    expect(notion.rows).toHaveLength(0)
   })
 })

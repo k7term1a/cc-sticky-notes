@@ -9,6 +9,7 @@ import { digestDue, FACTS_FOR_JEV, lastExchanges, readDigest, readFacts, runDige
 import { titleAndSummary } from './digest'
 import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
+import { pullNotes, pushNote, type SyncPorts } from './notion'
 import type { Ports } from './ports'
 import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
@@ -461,7 +462,54 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     p.ui.log(`cc-sticky-note ${ts.title}：${plainPreview(ts.summary ?? a.text, PREVIEW_CHARS)}　/sn 看完整答案`)
     p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
+    // the answered note goes to Notion for the other computers, in the background
+    if (opts.notionDataSource !== '') p.later(() => void syncPush(p, opts, id))
   } finally {
     await p.state.addPending(-1)
   }
+}
+
+const syncPorts = (p: Ports): SyncPorts => ({ ...p, projectKey: () => projectKey(p) })
+const syncStatusKey = async (p: Ports) => `notion-status:${await projectKey(p)}`
+
+/** One note to Notion; how it went is kept for /sn notion. */
+export async function syncPush(p: Ports, opts: Options, id: string): Promise<string> {
+  const node = (await refresh(p)).nodes[id]
+  if (!node) return 'gone'
+  const r = await pushNote(syncPorts(p), opts.notionDataSource, node)
+  if (r !== 'pushed' && r !== 'skipped') {
+    p.ui.log(`sticky-notes: Notion push failed (${r})`, 'debug')
+    await p.store.set(await syncStatusKey(p), `上傳失敗：${r}`)
+  }
+  return r
+}
+
+/** /sn notion push: every answered note of this project not yet in Notion. */
+export async function syncPushAll(p: Ports, opts: Options): Promise<{ pushed: number; failed: number }> {
+  const tree = await refresh(p)
+  let pushed = 0
+  let failed = 0
+  for (const node of Object.values(tree.nodes).sort((a, b) => a.anchor.at - b.anchor.at)) {
+    const r = await pushNote(syncPorts(p), opts.notionDataSource, node)
+    if (r === 'pushed') pushed++
+    else if (r !== 'skipped') failed++
+  }
+  await p.store.set(await syncStatusKey(p), `上傳 ${pushed} 張${failed ? `，${failed} 張失敗` : ''}（${new Date(await p.now()).toLocaleString()}）`)
+  return { pushed, failed }
+}
+
+/** The other computers' notes of this project into the tree; a toast when any came. */
+export async function syncPull(p: Ports, opts: Options): Promise<string> {
+  const r = await pullNotes(syncPorts(p), opts.notionDataSource, fn => change(p, fn), await refresh(p))
+  const text = 'error' in r ? `下載失敗：${r.error}` : `下載 ${r.added} 張`
+  await p.store.set(await syncStatusKey(p), `${text}（${new Date(await p.now()).toLocaleString()}）`)
+  if ('error' in r) p.ui.log(`sticky-notes: Notion pull failed (${r.error})`, 'debug')
+  else if (r.added > 0) p.ui.toast(`Sticky Notes：從其他電腦同步了 ${r.added} 張便利貼`)
+  return text
+}
+
+/** The last sync's outcome, for /sn notion. */
+export async function syncStatus(p: Ports): Promise<string | null> {
+  const s = await p.store.get(await syncStatusKey(p))
+  return typeof s === 'string' ? s : null
 }

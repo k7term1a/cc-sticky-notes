@@ -4,7 +4,7 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { applyOptionOverrides, change, digestNow, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, change, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
@@ -101,6 +101,10 @@ function portsOf($: EngineInterface): Ports {
         ]
       },
     },
+    place: async () => ({
+      remote: (await $.session.repo())?.remote ?? null,
+      machine: (await $.env.get('COMPUTERNAME')) ?? (await $.env.get('HOSTNAME')) ?? (await $.env.get('USER')) ?? 'unknown',
+    }),
     mcp: {
       tools: async () => (await $.tool.list()).filter(t => t.mcp).map(t => t.name),
       call: async (server, tool, args) => {
@@ -232,7 +236,10 @@ export const register: Register = (on, options) => {
     await applyOptionOverrides(kvOf($), opts)
     await $.command.register(COMMAND_SPEC)
     await $.command.register(SHORT_COMMAND_SPEC)
-    await prepare(portsOf($))
+    const p = portsOf($)
+    await prepare(p)
+    // the notes other computers made in this project (Notion), in the background
+    if (opts.notionDataSource !== '') p.later(() => void syncPull(p, opts))
     return next(e)
   })
 
