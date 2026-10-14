@@ -2,7 +2,16 @@
 
 一個 Claude Code mod：在專案 session 裡隨口問的「為什麼 / 這是什麼」不會進主線對話，而是變成「便利貼」，在背景回答、顯示在右側 pane，並存成一棵同專案所有 session 共用的樹。主線的 context 保持乾淨，追問也能一路掛在同一條旁支下。
 
-版本 0.0.3，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)；之後可能做的需求：[REQUESTS.md](REQUESTS.md)。
+版本 0.0.4，給朋友試用中。設計與決策：[PLAN.md](PLAN.md)；Mods API 實測紀錄：[PROBE.md](PROBE.md)；之後可能做的需求：[REQUESTS.md](REQUESTS.md)。
+
+**0.0.4 新的地方**
+
+- 多台電腦同步（選用）：便利貼透過你自己的 Notion 資料庫在電腦之間同步，見下方「在多台電腦之間同步」。
+- 卡片時間前面有底色的類別標籤：Jev 對這個主題的判斷（知識旁問、專案疑問、主線任務）。
+- 刪除便利貼：問題旁的 ✕ 或 `/sn rm`，只刪這台電腦的。
+- Jev 的對話框 30 秒沒回應就自動送進主線（`/sn timeout <秒>` 調整，0 一直等）。對話框本身會留在畫面上，關掉就好。
+- 拿掉「結束追問」按鈕（改用 `/sn back`）；舊的「這題在主線回答」便利貼會在開 session 時自動清掉。
+- `/sn provider`、`/sn every`、`/sn notion` 的設定改存在每台電腦自己的資料裡（之前在 Desktop 會設定失敗）。
 
 **0.0.3 新的地方**
 
