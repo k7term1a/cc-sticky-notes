@@ -4,7 +4,7 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { change, digestNow, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, change, digestNow, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
@@ -111,10 +111,14 @@ function portsOf($: EngineInterface): Ports {
     setOption: async (field, value) => {
       try {
         // the row of this plugin's own field: `cc-sticky-notes.<field>` (or `cc-sticky-notes@inline.<field>`)
+        // kept in this machine's store too, applied at session.start (applyOptionOverrides): a
+        // --plugin-dir mod's fields are not rows of /config (seen 10/14), so that is the one that holds
+        await $.store.set(optionKey(field), value)
         const row = (await $.config.list()).find(r => /^cc-sticky-notes(@[^.]+)?\./.test(r.key) && r.key.endsWith(`.${field}`))
-        if (!row) return { ok: false, reason: `找不到 ${field} 這個設定` }
+        if (!row) return { ok: true }
         const r = await $.config.set({ key: row.key, value: value as never })
-        return r.deny !== undefined ? { ok: false, reason: r.deny } : { ok: true }
+        if (r.deny !== undefined) $.ui.log(`sticky-notes: /config kept ${field} as it was (${r.deny}); this machine's own setting stands`, { to: 'debug' })
+        return { ok: true }
       } catch (err) {
         return { ok: false, reason: String(err).slice(0, 200) }
       }
@@ -225,6 +229,7 @@ export const register: Register = (on, options) => {
   const opts = readOptions(options)
 
   on('session.start', async ($, e, next) => {
+    await applyOptionOverrides(kvOf($), opts)
     await $.command.register(COMMAND_SPEC)
     await $.command.register(SHORT_COMMAND_SPEC)
     await prepare(portsOf($))

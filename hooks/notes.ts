@@ -50,6 +50,20 @@ export function readOptions(o: PluginOptions): Options {
   }
 }
 
+/** What /sn provider, /sn every and /sn notion set, kept per machine in $.store over the plugin settings. */
+export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource'] as const
+export const optionKey = (field: (typeof OVERRIDABLE)[number]) => 'option:' + field
+
+/** Puts this machine's own settings (optionKey) over the plugin's, in place. */
+export async function applyOptionOverrides(kv: { get(key: string): Promise<unknown> }, opts: Options): Promise<void> {
+  const provider = await kv.get(optionKey('summaryProvider'))
+  if (provider === 'claude' || provider === 'openai') opts.summaryProvider = provider
+  const every = await kv.get(optionKey('digestEvery'))
+  if (typeof every === 'number' && Number.isInteger(every) && every >= 0) opts.digestEvery = every
+  const notion = await kv.get(optionKey('notionDataSource'))
+  if (typeof notion === 'string') opts.notionDataSource = notion
+}
+
 /** The configured summary provider; openai without a key falls back to claude with one toast. */
 export function summaryProvider(p: Ports, opts: Options): SummaryProvider {
   const log = (text: string) => p.ui.log(text, 'debug')

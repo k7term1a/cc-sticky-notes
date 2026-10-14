@@ -6,7 +6,7 @@ import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
 import { notionServer } from '../hooks/notion'
-import { digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { applyOptionOverrides, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -590,5 +590,18 @@ describe('Notion sync: finding the connector', () => {
     await runCommand(f.ports, o, 'notion collection://8e59b59f-189a-443c-9c5b-083b5766ac70')
     expect(f.options.notionDataSource).toBe('collection://8e59b59f-189a-443c-9c5b-083b5766ac70')
     expect(await runCommand(f.ports, o, 'notion test')).toMatchObject({ text: expect.stringContaining('找不到 Notion connector') })
+  })
+})
+
+describe('per-machine settings (/sn provider, every, notion)', () => {
+  test('the store\'s values go over the plugin settings at session start', async () => {
+    const f = fake()
+    await f.kv.set('option:summaryProvider', 'openai')
+    await f.kv.set('option:digestEvery', 0)
+    await f.kv.set('option:notionDataSource', 'collection://8e59b59f-189a-443c-9c5b-083b5766ac70')
+    await f.kv.set('option:junk', 'x')
+    const o = readOptions({ summaryProvider: 'claude', digestEvery: 3 })
+    await applyOptionOverrides(f.kv, o)
+    expect([o.summaryProvider, o.digestEvery, o.notionDataSource]).toEqual(['openai', 0, 'collection://8e59b59f-189a-443c-9c5b-083b5766ac70'])
   })
 })
