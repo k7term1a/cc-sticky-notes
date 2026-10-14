@@ -122,6 +122,8 @@ export type NotionRow = {
   answeredBy: string
   machine: string
   at: number
+  /** 不同步: a computer deleted it; nobody pulls it any more. */
+  unsynced: boolean
 }
 
 /** A rows-mode query answer → its rows; rows without a Note ID (or the probe's) are left out. */
@@ -140,6 +142,7 @@ export function parseRows(text: string): NotionRow[] {
       answeredBy: s(r['回答者']),
       machine: s(r['電腦']),
       at: Date.parse(s(r['date:建立時間:start'])) || 0,
+      unsynced: r['不同步'] === true || r['不同步'] === '__YES__',
     }))
     .filter(r => r.noteId !== '' && !r.noteId.startsWith('probe-'))
 }
@@ -228,7 +231,7 @@ export async function pullNotes(p: SyncPorts, dataSource: string, change: (fn: (
     let t = tree
     for (const row of rows) {
       newest = Math.max(newest, row.at)
-      if (t.nodes[row.noteId] || (await p.store.get(notionKey(root, row.noteId))) !== undefined) continue
+      if (row.unsynced || t.nodes[row.noteId] || (await p.store.get(notionKey(root, row.noteId))) !== undefined) continue
       const page = await p.mcp.call(server, 'notion-fetch', { id: row.url })
       if (page.isError) continue
       const answer = pageContent(resultText(page))
@@ -260,4 +263,53 @@ export async function pullNotes(p: SyncPorts, dataSource: string, change: (fn: (
   } catch (err) {
     return { error: String(err).slice(0, 160) }
   }
+}
+
+/** The page id in a Notion page URL (its last 32 hex digits). */
+export function pageIdOf(url: string): string | null {
+  return /([0-9a-f]{32})(?:[?#].*)?$/i.exec(url.replace(/-/g, ''))?.[1] ?? null
+}
+
+/**
+ * Marks the rows of these notes 不同步 (deleted on a computer). A note never pushed or
+ * pulled has no row and is skipped; one pushed before its URL was kept is found by its
+ * Note ID. Never throws; returns how many rows it marked.
+ */
+export async function markUnsynced(p: SyncPorts, dataSource: string, ids: readonly string[]): Promise<number> {
+  if (dataSource === '' || ids.length === 0) return 0
+  try {
+    const server = await serverOf(p)
+    if (server === null) return 0
+    const root = await p.projectKey()
+    let marked = 0
+    for (const id of ids) {
+      const kept = await p.store.get(notionKey(root, id))
+      if (kept === undefined) continue
+      let url = typeof kept === 'string' ? kept : ''
+      if (pageIdOf(url) === null) {
+        const q = await p.mcp.call(server, 'notion-query-data-sources', {
+          data: {
+            mode: 'rows',
+            data_source_url: dataSource,
+            filter: { type: 'group', operator: 'and', filters: [{ type: 'property', property: 'Note ID', propertyType: 'text', operator: 'string_is', value: { type: 'exact', value: id } }] },
+            limit: 1,
+          },
+        })
+        url = q.isError ? '' : (parseRowsAll(resultText(q))[0]?.url ?? '')
+      }
+      const pageId = pageIdOf(url)
+      if (pageId === null) continue
+      const r = await p.mcp.call(server, 'notion-update-page', { page_id: pageId, command: 'update_properties', properties: { 不同步: '__YES__' } })
+      if (!r.isError) marked++
+    }
+    return marked
+  } catch {
+    return 0
+  }
+}
+
+/** Every row of a query answer with a URL, the probe's and the unsynced ones too. */
+function parseRowsAll(text: string): { url: string }[] {
+  const o = jsonOf(text) as { results?: unknown } | null
+  return o && Array.isArray(o.results) ? (o.results as Record<string, unknown>[]).map(r => ({ url: typeof r.url === 'string' ? r.url : '' })) : []
 }

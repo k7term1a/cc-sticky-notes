@@ -96,6 +96,12 @@
       "default": "",
       "description": "collection://… of the Notion database the notes sync to through the claude.ai Notion connector; empty turns the sync off. Also /sn notion <collection://…>."
     },
+    "askTimeout": {
+      "type": "number",
+      "title": "Dialog timeout (s)",
+      "default": 30,
+      "description": "Seconds the Jev dialog waits before the prompt goes to the main line by itself; 0 waits forever. Also /sn timeout <n>."
+    },
     "autoOpenPane": {
       "type": "boolean",
       "title": "Auto-open pane",

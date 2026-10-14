@@ -4,7 +4,7 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { applyOptionOverrides, change, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
@@ -68,6 +68,7 @@ function portsOf($: EngineInterface): Ports {
     },
     now: () => $.clock.now(),
     later: fn => void $.clock.after(0, fn),
+    sleep: ms => $.clock.sleep(ms),
     store: kvOf($),
     // every request that costs a quota is counted as it leaves (usage.ts)
     fetch: async (url, init) => {
@@ -156,6 +157,7 @@ function portsOf($: EngineInterface): Ports {
       lastSampleId: () => read($, lastSampleAtom),
       setLastSampleId: async id => void (await update($, lastSampleAtom, () => id)),
       setSelected: async id => void (await update($, selectedAtom, () => id)),
+      selected: () => read($, selectedAtom),
       contextChanged: async () => void (await update($, contextRevAtom, n => n + 1)),
       setDigestStatus: async (running, result) =>
         void (await update($, digestStatusAtom, s => (running ? { ...s, running: true } : { running: false, at: Date.now(), result }))),
@@ -326,6 +328,7 @@ export const register: Register = (on, options) => {
       edit: id => void update($, editingAtom, () => id),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
       rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
+      remove: nodeId => void confirmDelete(portsOf($), opts, nodeId),
       addFact: text =>
         void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
       removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),

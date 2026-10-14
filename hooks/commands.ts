@@ -6,7 +6,7 @@ import type { CommandRunResult } from 'claude-code'
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
 import { notionProbe } from './notion'
-import { change, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { change, confirmDelete, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -14,7 +14,7 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | provider | every | ctx | feedback | calibrate | doctor',
+  description: 'Sticky Notes: open/close the pane, or new | back | rm | timeout | provider | every | ctx | notion | feedback | calibrate | doctor',
   argumentHint: '[new <問題> | back | provider claude|openai | every <n> | ctx [add <文字> | rm <n> | refresh] | feedback … | calibrate]',
 }
 
@@ -79,6 +79,24 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
         route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' },
       })
       p.ui.toast(dropReason(rest))
+      return {}
+    }
+    case 'rm': {
+      // the note the pane has open (its thread runs through it), as ✕ does
+      const id = await p.state.selected()
+      if (id === null || id === '__context__') return { text: '先在 pane 點開要刪的便利貼（或在問題旁按 ✕）' }
+      const n = await confirmDelete(p, opts, id)
+      return n > 0 ? {} : { text: '沒有刪除' }
+    }
+    case 'timeout': {
+      // seconds the Jev dialog waits before the prompt goes to the main line; 0 waits forever
+      if (rest === '') return { text: opts.askTimeout > 0 ? `對話框 ${opts.askTimeout} 秒沒回應就送進主線。調整：/sn timeout <秒>（0 = 一直等）` : '對話框會一直等到你回答。調整：/sn timeout <秒>' }
+      const n = Number(rest)
+      if (!Number.isInteger(n) || n < 0 || n > 600) return { text: '用法：/sn timeout <0–600 的整數秒數>（0 = 一直等）' }
+      const r = await p.setOption('askTimeout', n)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.askTimeout = n
+      p.ui.toast(n > 0 ? `Sticky Notes：對話框 ${n} 秒沒回應就送進主線` : 'Sticky Notes：對話框會一直等')
       return {}
     }
     case 'back': {

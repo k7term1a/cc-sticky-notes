@@ -116,6 +116,8 @@ export type PaneActions = {
   followUp(parentId: string, question: string): void
   /** A rewritten question: asked again beside the old one (a new topic for a first question). */
   rewrite(nodeId: string, question: string): void
+  /** ✕: asks, then deletes this note and the follow-ups under it (this computer only). */
+  remove(nodeId: string): void
   /** R4: the project context card's own edits, and a digest run now. */
   addFact(text: string): void
   removeFact(id: string): void
@@ -146,7 +148,7 @@ function categoryChip(els: ElementTable, surface: RenderSurface, key: string, je
 
 /**
  * The question drawn as the person's own prompt: Desktop's bubble look, on the right,
- * with ✎ beside it while the pointer is over the row (a Box cannot be pressed, and a
+ * with ✎ (ask again) and ✕ (delete) beside it while the pointer is over the row (a Box cannot be pressed, and a
  * Button draws one clipped line, so the bubble itself is not the press). The terminal
  * has no pointer to reveal it: there ✎ is always drawn.
  */
@@ -161,6 +163,7 @@ function bubble(els: ElementTable, surface: RenderSurface, node: TreeNode, act: 
     <Box key={`q:${node.id}`} alignSelf="flex-end" flexDirection="row" alignItems="center" columnGap={1} marginLeft={6} hover={{}}>
       <Box {...(surface === 'terminal' ? {} : { display: 'none' as const, hover: { display: 'flex' as const } })}>
         <Button key={`edit:${node.id}`} plain dimColor label="✎" onPress={() => act.edit(node.id)} />
+        <Button key={`remove:${node.id}`} plain dimColor label="✕" onPress={() => act.remove(node.id)} />
       </Box>
       <Box paddingX={1} {...look}>
         <Text>{shownQuestion(node.question)}</Text>
