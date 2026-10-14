@@ -40,7 +40,7 @@ type Fake = {
 type FakeNotion = { rows: Record<string, unknown>[]; bodies: Map<string, string> }
 const newNotion = (): FakeNotion => ({ rows: [], bodies: new Map() })
 
-function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string | string[]; notion?: FakeNotion; machine?: string; remote?: string | null; timeoutFires?: boolean; askNever?: boolean } = {}): Fake {
+function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; openaiKey?: string; askAnswer?: string | string[]; notion?: FakeNotion; machine?: string; remote?: string | null; timeoutFires?: boolean; askNever?: boolean; messages?: SessionMessage[] } = {}): Fake {
   const mem = new Map<string, string>()
   const kv: KV = {
     get: async k => (mem.has(k) ? JSON.parse(mem.get(k)!) : undefined),
@@ -89,7 +89,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     sessionId: async () => session,
     projectRoot: async () => ROOT,
     turns: async () => 7,
-    messages: async () => messages,
+    messages: async () => opts.messages ?? messages,
     now: async () => ++now,
     later: fn => void queue.push(fn),
     // the dialog timer: never fires unless a test says (opts.timeoutFires)
@@ -403,8 +403,8 @@ describe('notes end to end (stubbed fork and complete)', () => {
 
 describe('R4: the main-line digest and the project context', () => {
   test('due every digestEvery turns; 0 turns it off', () => {
-    expect(digestDue(3, 3, null)).toBe(true)
-    expect(digestDue(3, 2, null)).toBe(false)
+    expect(digestDue(3, 3, null)).toBe(false) // the first comes with the session's first note
+    expect(digestDue(3, 99, null)).toBe(false)
     expect(digestDue(3, 5, { text: 'x', turns: 3, at: 0 })).toBe(false)
     expect(digestDue(3, 6, { text: 'x', turns: 3, at: 0 })).toBe(true)
     expect(digestDue(0, 99, null)).toBe(false)
@@ -754,5 +754,22 @@ describe('deleting a note (this computer only) and the dialog timeout', () => {
     expect(await routePrompt(f.ports, opts, 'what is TCP backpressure')).toMatchObject({ decision: { kind: 'main' }, asked: true, choice: null })
     expect(f.toasts.some(t => t.includes('30 秒沒有回應'))).toBe(true)
     expect(readOptions({}).askTimeout).toBe(30)
+  })
+})
+
+describe('a new session and the first digest (10/14)', () => {
+  test('a new session\'s first prompt goes to the main line without asking Jev', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.99), askAnswer: NEW_NOTE_LABEL, messages: [] })
+    expect(await routePrompt(f.ports, opts, 'what is TCP backpressure')).toMatchObject({ decision: { kind: 'main' }, asked: false })
+    expect(f.jevCalls).toHaveLength(0)
+    expect(f.asked()).toBe(0)
+  })
+
+  test('the session\'s first note starts its digest; none before it', async () => {
+    const f = fake()
+    expect(await readDigest(f.kv, ROOT, 'S1')).toBeNull()
+    await startNote(f.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await f.runLater()
+    expect(await readDigest(f.kv, ROOT, 'S1')).toMatchObject({ text: '主線在把 auth 改成 session cookie。' })
   })
 })

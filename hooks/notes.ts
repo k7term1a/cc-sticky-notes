@@ -285,6 +285,8 @@ export async function routePrompt(p: Ports, opts: Options, prompt: string, via: 
   const keyed = recentNotes(tree, activeId).map((node, i) => ({ key: `n${i + 1}`, node }))
   const candidates = keyed.map(k => ({ key: k.key, title: k.node.title, question: k.node.question }))
   const none = { asked: false, choice: null, parentTitle: null }
+  // a new session's first prompt opens the work: the main line, no Jev, no dialog (the developer, 10/14)
+  if (!(await p.messages()).some(isTypedPrompt)) return { decision: { kind: 'main' }, verdict: null, ...none }
   const r = await jev.classify({ key: await p.keys.typesafe(), fetch: p.fetch, now: p.now }, await jevInput(p, tree, sessionId, prompt, candidates))
   if (!r.ok) {
     if (r.reason !== 'no-key') p.ui.log(`sticky-notes: Jev unavailable (${r.reason}${r.status ? ` ${r.status}` : ''}); main line`, 'debug')
@@ -482,6 +484,11 @@ export async function startNote(p: Ports, opts: Options, req: NoteRequest): Prom
     ).tree,
   )
   await p.state.setTurnsAtLastSidebar(await p.turns())
+  // R4: this session's first note starts its main-line digest (the whole session), in the background;
+  // after that turn.complete keeps it every digestEvery turns (the developer, 10/14)
+  if (opts.digestEvery > 0 && (await readDigest(p.store, await projectKey(p), anchor.sessionId)) === null) {
+    p.later(() => void digestNow(p, opts, true))
+  }
   await p.state.addPending(1)
   // the pane follows the newest note of this session (its answer shows as it arrives)
   await p.state.setSelected(id)

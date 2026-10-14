@@ -55,9 +55,14 @@ export async function readFacts(kv: KV, root: string): Promise<ContextFact[]> {
 }
 
 /** Whether a digest is due: digestEvery turns since the last one (0 turns it off). */
+/**
+ * Whether a digest is due at the end of a turn: digestEvery turns since the last one (0
+ * turns it off). None before the first: that one comes with the session's first note
+ * (startNote), so a session that makes no note spends nothing on it.
+ */
 export function digestDue(every: number, turns: number, last: SessionDigest | null): boolean {
-  if (every <= 0) return false
-  return turns - (last?.turns ?? 0) >= every
+  if (every <= 0 || last === null) return false
+  return turns - last.turns >= every
 }
 
 const clip = (s: string, n: number) => {
