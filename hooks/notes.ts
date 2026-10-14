@@ -15,7 +15,7 @@ import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
 import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, pickPrompt, type Decision, type Suggested } from './route'
-import { addNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
+import { addNode, addTag, removeNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
   routeThreshold: number
@@ -88,10 +88,25 @@ export async function refresh(p: Ports): Promise<Tree> {
   return tree
 }
 
-/** session.start: move a tree saved in the old one-key layout, then load. */
+/**
+ * The project_question bookmarks the mod kept until 10/12 (「這題在主線回答」): no answer,
+ * promoted at creation. The developer asked them gone (10/14); nothing makes them any more.
+ */
+export function isMainLineBookmark(n: TreeNode): boolean {
+  return n.promotedAt !== null && n.answer === '' && n.route.label === 'project_question' && n.children.length === 0
+}
+
+/** session.start: move a tree saved in the old one-key layout, drop the old bookmarks, then load. */
 export async function prepare(p: Ports): Promise<Tree> {
-  const moved = await migrateLegacy(p.store, await projectKey(p))
+  const root = await projectKey(p)
+  const moved = await migrateLegacy(p.store, root)
   if (moved > 0) p.ui.log(`sticky-notes: moved ${moved} notes to the per-node store layout`, 'debug')
+  const tree = await loadTree(p.store, root)
+  const bookmarks = Object.values(tree.nodes).filter(isMainLineBookmark)
+  if (bookmarks.length > 0) {
+    await mutateTree(p.store, root, t => bookmarks.reduce((acc, n) => removeNode(acc, n.id), t))
+    p.ui.log(`sticky-notes: removed ${bookmarks.length} old 在主線回答 bookmarks`, 'debug')
+  }
   return refresh(p)
 }
 
@@ -419,7 +434,8 @@ export async function startNote(p: Ports, opts: Options, req: NoteRequest): Prom
         anchor,
         route: req.route,
         answeredBy: req.answerer === 'fork' ? 'claude-fork' : opts.summaryProvider,
-        tags: req.tag ? [req.tag] : [],
+        // the tag is the topic's: on a first question only (answerNote names one when Jev gave none)
+        tags: req.tag && req.attach.kind === 'root' ? [req.tag] : [],
       },
       req.attach,
     ).tree,
@@ -454,8 +470,14 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
       return
     }
     await change(p, t => updateNode(t, id, { answer: a.text, answeredBy: a.answeredBy }))
-    const ts = await titleAndSummary(provider, req.question, a.text)
-    await change(p, t => updateNode(t, id, { title: ts.title, summary: ts.summary }))
+    const ts = await titleAndSummary(provider, req.question, a.text, (await refresh(p)).tags)
+    // the tag is the topic's: a first question gets one (Jev's pick, else the summary layer's); a follow-up keeps its root's
+    await change(p, t => {
+      const node = t.nodes[id]
+      const tag = node && node.parentId === null ? (req.tag ?? ts.tag) : undefined
+      const next = updateNode(t, id, { title: ts.title, summary: ts.summary, ...(tag ? { tags: [tag] } : {}) })
+      return tag ? addTag(next, tag) : next
+    })
     await p.state.addUnread(1)
     // M1 (PLAN.md): the answer is shown with $.ui.log — a dim transcript line the model never reads.
     // $.ui.log is plain text (no Markdown): one clean line here, the rendered answer in the pane.

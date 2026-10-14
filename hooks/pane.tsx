@@ -7,14 +7,13 @@
 //  │ TCP 背壓　10/07 11:01                             │
 //  ╰──────────────────────────────────────────────────╯
 //  ╭──────────────────────────────────────────────────╮   open: the thread as a conversation,
-//  │ 樹載入原因                          10/07 10:41 · 3 │   no Q/A words — the question is a
+//  │ 樹載入原因                  資料結構 · 10/07 10:41 · 3 │   no Q/A words — the question is a
 //  │              ✎ ╭ 為什麼載入便利貼樹要讀… ╮       │   prompt bubble on the right (✎ under
 //  │ <answer>                                         │   the pointer rewrites it), the answer
 //  │ ● 為何全讀節點   ○ 存成一個 JSON                   │   under it; several follow-ups: pick
 //  │              ✎ ╭ 沒看懂，為什麼需要讀取… ╮       │   which one the thread continues by
 //  │ <answer>                                         │
 //  │ [回覆…        ] [↵]                              │   the reply follows up the last answer
-//  │ 結束追問                                          │   on the card this session follows up
 //  ╰──────────────────────────────────────────────────╯
 // The card this session follows up has a green border; every other is plain gray.
 import type { ElementTable, RenderElement, RenderSurface } from 'claude-code'
@@ -116,12 +115,32 @@ export type PaneActions = {
   followUp(parentId: string, question: string): void
   /** A rewritten question: asked again beside the old one (a new topic for a first question). */
   rewrite(nodeId: string, question: string): void
-  /** 結束追問: this session follows up no note any more. */
-  unfollow(): void
   /** R4: the project context card's own edits, and a digest run now. */
   addFact(text: string): void
   removeFact(id: string): void
   refreshDigest(): void
+}
+
+/**
+ * Tag backgrounds: translucent, so the text stays legible on the dark theme and the light
+ * one; a tag always gets the same one (by its characters), different tags mostly differ.
+ */
+export const TAG_COLORS = ['#7F77DD40', '#1D9E7540', '#D85A3040', '#378ADD40', '#BA751740', '#D4537E40'] as const
+
+export function tagColor(tag: string): string {
+  let h = 0
+  for (const ch of tag) h = (h * 31 + ch.codePointAt(0)!) >>> 0
+  return TAG_COLORS[h % TAG_COLORS.length]!
+}
+
+/** The topic tag as a chip: its own background on Desktop; the terminal has no translucency, so it is dim. */
+function tagChip(els: ElementTable, surface: RenderSurface, key: string, tag: string): RenderElement {
+  const { Text } = els
+  return surface === 'terminal' ? (
+    <Text key={key} dimColor>{`#${tag}`}</Text>
+  ) : (
+    <Text key={key} backgroundColor={tagColor(tag)}>{` ${tag} `}</Text>
+  )
 }
 
 /**
@@ -263,13 +282,18 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
           const n = countAll(tree, id)
           const meta = `${when(root.anchor.at)}${n > 0 ? ` · ${n + 1}` : ''}`
           const frame = following ? { borderColor: 'success' } : { borderDimColor: true }
+          const tag = root.tags[0] ? tagChip(els, d.surface, `tag:${id}`, root.tags[0]) : null
 
           if (!open) {
+            // closed: one line. A Button holds one plain string (no colored part), so the tag is its
+            // own chip between two presses that both open the card: the title, and the time
             return (
-              <Box key={`card:${id}`} borderStyle="round" paddingX={1} {...frame}>
-                {/* closed: the title and its time are one press (a Button holds one string, drawn on
-                    one line: Desktop ignores a newline in it and clips what overflows) */}
-                <Button key={`open:${id}`} plain label={`${root.title}${root.answer === '' && root.promotedAt === null ? ' …' : ''}　${meta}`} onPress={() => act.select(id)} />
+              <Box key={`card:${id}`} flexDirection="row" alignItems="center" columnGap={1} borderStyle="round" paddingX={1} {...frame}>
+                <Box flexGrow={1}>
+                  <Button key={`open:${id}`} plain label={`${root.title}${root.answer === '' && root.promotedAt === null ? ' …' : ''}`} onPress={() => act.select(id)} />
+                </Box>
+                {tag}
+                <Button key={`open-meta:${id}`} plain dimColor label={meta} onPress={() => act.select(id)} />
               </Box>
             )
           }
@@ -287,8 +311,11 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
           }
           return (
             <Box key={`card:${id}`} flexDirection="column" borderStyle="round" paddingX={1} gap={1} {...frame}>
-              <Box justifyContent="space-between">
-                <Button key={`close:${id}`} plain label={root.title} onPress={() => act.select(null)} />
+              <Box flexDirection="row" alignItems="center" columnGap={1}>
+                <Box flexGrow={1}>
+                  <Button key={`close:${id}`} plain label={root.title} onPress={() => act.select(null)} />
+                </Box>
+                {tag}
                 <Text dimColor>{meta}</Text>
               </Box>
               {thread.map((node, i) => {
@@ -329,7 +356,6 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
                   }}
                 />
               )}
-              {following && <Button key={`unfollow:${id}`} plain dimColor label="結束追問" onPress={() => act.unfollow()} />}
             </Box>
           )
         })}

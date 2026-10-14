@@ -5,8 +5,9 @@ import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
+import { parseTitleSummary } from '../hooks/digest'
 import { notionServer, projectName } from '../hooks/notion'
-import { applyOptionOverrides, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { applyOptionOverrides, prepare, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -629,6 +630,42 @@ describe('per-machine settings (/sn provider, every, notion)', () => {
     const o = readOptions({ summaryProvider: 'claude', digestEvery: 3 })
     await applyOptionOverrides(f.kv, o)
     expect([o.summaryProvider, o.digestEvery, o.notionDataSource]).toEqual(['openai', 0, 'collection://8e59b59f-189a-443c-9c5b-083b5766ac70'])
+  })
+})
+
+describe('tags and the old bookmarks (10/14)', () => {
+  test('a first question gets the summary layer\'s tag, reusing a known one; a follow-up gets none of its own', async () => {
+    expect(parseTitleSummary('{"title":"t","summary":"s","tag":"#資料結構與演算法很長"}')).toEqual({ title: 't', summary: 's', tag: '資料結構與演算法' })
+    expect(parseTitleSummary('{"title":"t","summary":"s"}')).toEqual({ title: 't', summary: 's' })
+    const f = fake()
+    const id = await startNote(f.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await f.runLater()
+    let t = await f.tree()
+    expect(t.nodes[id]!.tags).toEqual([]) // the fake's summary layer gives no tag
+    const g = fake()
+    const root = await startNote(g.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' }, tag: '網路' })
+    await g.runLater()
+    const child = await startNote(g.ports, opts, { question: 'q2', attach: { kind: 'under', parentId: root }, answerer: 'fork', route: { label: 'followup', confidence: 1, source: 'manual' }, tag: '別的' })
+    await g.runLater()
+    t = await g.tree()
+    expect(t.nodes[root]!.tags).toEqual(['網路'])
+    expect(t.nodes[child]!.tags).toEqual([])
+    expect(t.tags).toEqual(['網路'])
+  })
+
+  test('the old 在主線回答 bookmarks go at session start; answered notes stay', async () => {
+    const f = fake()
+    const keep = await startNote(f.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+    await f.runLater()
+    const at = 5
+    await f.kv.set('node:' + ROOT + ':bm', {
+      id: 'bm', parentId: null, outlineId: null, anchor: { sessionId: 'S1', turnId: null, messageId: null, at, mainSnippet: '' },
+      question: '我們為什麼用 X？', answer: '', answeredBy: 'claude', title: 'X', summary: null, tags: [],
+      route: { label: 'project_question', confidence: 0.9, source: 'jev' }, promotedAt: at, promotedIn: 'S1', children: [],
+    })
+    expect(Object.keys((await f.tree()).nodes).sort()).toEqual(['bm', keep].sort())
+    await prepare(f.ports)
+    expect(Object.keys((await f.tree()).nodes)).toEqual([keep])
   })
 })
 

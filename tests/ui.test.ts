@@ -40,9 +40,9 @@ test('empty: the pane validates on terminal and desktop', async ($, on) => {
   }
 })
 
-test('cards: one per topic; a press opens the thread; picks, reply, rewrite and 結束追問', async ($, on) => {
+test('cards: one per topic; a press opens the thread; picks, reply and rewrite; the tag as a chip', async ($, on) => {
   mock.store(on, {
-    [`node:${ROOT}:r1`]: node('r1', null, 1, '樹載入原因', '因為 $.store 一次只讀一個 key。', '一次只能讀一個 key。'),
+    [`node:${ROOT}:r1`]: { ...node('r1', null, 1, '樹載入原因', '因為 $.store 一次只讀一個 key。', '一次只能讀一個 key。'), tags: ['資料結構'] },
     [`node:${ROOT}:c1`]: node('c1', 'r1', 2, '為何全讀', '因為 roots 與 children 是推出來的。'),
     [`node:${ROOT}:c3`]: node('c3', 'r1', 4, '一個 JSON', '同時寫會互相蓋掉。'),
     [`node:${ROOT}:r2`]: node('r2', null, 3, 'TCP 背壓', '接收窗口。'),
@@ -71,6 +71,9 @@ test('cards: one per topic; a press opens the thread; picks, reply, rewrite and 
     expect(await pane.find({ key: 'open:r1' })).toBeDefined()
     expect(await pane.find({ key: 'open:r2' })).toBeDefined()
     expect(await pane.find({ key: 'q:r1' })).toBeUndefined()
+    // the tag before the time; the time opens the card too
+    expect(await pane.find({ type: 'Text', text: surface === 'terminal' ? /^#資料結構$/ : /^ 資料結構 $/ })).toBeDefined()
+    expect(await pane.find({ key: 'open-meta:r1' })).toBeDefined()
     // open: the thread runs on down by the newest follow-up (c3), with both offered as picks
     await pane.press({ key: 'open:r1' })
     expect(await pane.find({ key: 'q:r1' })).toBeDefined()
@@ -94,19 +97,12 @@ test('cards: one per topic; a press opens the thread; picks, reply, rewrite and 
   await clock.advance(10) // the answer runs in $.clock.after(0)
   expect(await pane.find({ type: 'Text', text: /^那 children 什麼時候算？$/ })).toBeDefined()
   expect(await pane.find({ key: 'reply:c1' })).toBeUndefined() // a fresh, empty box under the new note
-  expect(await pane.find({ key: 'unfollow:r1' })).toBeDefined() // the green card: this session follows it up
   await pane.unmount()
   await clock.advance(1000)
   expect(forks).toHaveLength(1)
   expect(forked).toContain('[side thread so far]')
   expect(forked).toContain('Q2: 為何全讀?')
   expect(forked).toContain('[question]\n那 children 什麼時候算？')
-
-  // 結束追問
-  pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  await pane.press({ key: 'unfollow:r1' })
-  expect(await pane.find({ key: 'unfollow:r1' })).toBeUndefined()
-  await pane.unmount()
 
   // ✎ (always drawn on the terminal): asked again beside the old question, under the same parent
   // (the card is still open on the reply's thread, which runs through c1)

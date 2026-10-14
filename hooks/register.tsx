@@ -196,12 +196,6 @@ async function editFacts($: EngineInterface, edit: (facts: ContextFact[]) => Con
   await p.state.contextChanged()
 }
 
-/** 結束追問 on the green card: this session follows up no note. */
-async function unfollow($: EngineInterface) {
-  const p = portsOf($)
-  const sessionId = await p.sessionId()
-  await change(p, t => setActive(t, sessionId, null))
-}
 
 /**
  * ✎: a rewritten question is asked again beside the old one — a new follow-up of the
@@ -332,7 +326,6 @@ export const register: Register = (on, options) => {
       edit: id => void update($, editingAtom, () => id),
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
       rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
-      unfollow: () => void unfollow($),
       addFact: text =>
         void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
       removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),
