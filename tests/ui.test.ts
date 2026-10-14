@@ -42,7 +42,7 @@ test('empty: the pane validates on terminal and desktop', async ($, on) => {
 
 test('cards: one per topic; a press opens the thread; picks, reply and rewrite; the tag as a chip', async ($, on) => {
   mock.store(on, {
-    [`node:${ROOT}:r1`]: { ...node('r1', null, 1, '樹載入原因', '因為 $.store 一次只讀一個 key。', '一次只能讀一個 key。'), tags: ['資料結構'] },
+    [`node:${ROOT}:r1`]: (() => { const n = node('r1', null, 1, '樹載入原因', '因為 $.store 一次只讀一個 key。', '一次只能讀一個 key。'); return { ...n, route: { ...n.route, jev: 'sidebar_knowledge' } } })(),
     [`node:${ROOT}:c1`]: node('c1', 'r1', 2, '為何全讀', '因為 roots 與 children 是推出來的。'),
     [`node:${ROOT}:c3`]: node('c3', 'r1', 4, '一個 JSON', '同時寫會互相蓋掉。'),
     [`node:${ROOT}:r2`]: node('r2', null, 3, 'TCP 背壓', '接收窗口。'),
@@ -72,7 +72,7 @@ test('cards: one per topic; a press opens the thread; picks, reply and rewrite; 
     expect(await pane.find({ key: 'open:r2' })).toBeDefined()
     expect(await pane.find({ key: 'q:r1' })).toBeUndefined()
     // the tag before the time; the time opens the card too
-    expect(await pane.find({ type: 'Text', text: surface === 'terminal' ? /^#資料結構$/ : /^ 資料結構 $/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: surface === 'terminal' ? /^\[知識旁問\]$/ : /^ 知識旁問 $/ })).toBeDefined()
     expect(await pane.find({ key: 'open-meta:r1' })).toBeDefined()
     // open: the thread runs on down by the newest follow-up (c3), with both offered as picks
     await pane.press({ key: 'open:r1' })

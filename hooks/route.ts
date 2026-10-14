@@ -44,7 +44,7 @@ export type Decision =
       parentId?: string
       answerer: Answerer
       tag: TagDecision
-      route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }
+      route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual'; jev?: string }
     }
 
 export function decideTag(verdict: JevVerdict, tagsKnown: number): TagDecision {
@@ -72,7 +72,7 @@ export function decide(verdict: JevVerdict | null, t: Thresholds): Decision {
   }
 }
 
-const ROUTE_NAME: Record<RouteLabel, string> = {
+export const ROUTE_NAME: Record<RouteLabel, string> = {
   main_task: '主線任務',
   sidebar_knowledge: '知識旁問',
   project_question: '專案疑問',
@@ -147,6 +147,6 @@ export function decideFromChoice(choice: AskChoice | null, verdict: JevVerdict, 
     ...(choice === 'followup' && parentId !== undefined ? { parentId } : {}),
     answerer: verdict.needsProjectCtx >= NEEDS_CTX_AT ? 'fork' : 'summary-provider',
     tag: decideTag(verdict, tagsKnown),
-    route: { label: choice, confidence: verdict.route.confidence, source: 'ask' },
+    route: { label: choice, confidence: verdict.route.confidence, source: 'ask', jev: verdict.route.label },
   }
 }

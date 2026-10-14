@@ -5,7 +5,6 @@ import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
 import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
-import { parseTitleSummary } from '../hooks/digest'
 import { notionServer, projectName } from '../hooks/notion'
 import { applyOptionOverrides, prepare, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
@@ -634,23 +633,17 @@ describe('per-machine settings (/sn provider, every, notion)', () => {
 })
 
 describe('tags and the old bookmarks (10/14)', () => {
-  test('a first question gets the summary layer\'s tag, reusing a known one; a follow-up gets none of its own', async () => {
-    expect(parseTitleSummary('{"title":"t","summary":"s","tag":"#資料結構與演算法很長"}')).toEqual({ title: 't', summary: 's', tag: '資料結構與演算法' })
-    expect(parseTitleSummary('{"title":"t","summary":"s"}')).toEqual({ title: 't', summary: 's' })
-    const f = fake()
-    const id = await startNote(f.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
+  test('a note made from the dialog keeps Jev\'s call; old notes get it from their feedback record', async () => {
+    const f = fake({ typesafeKey: 'k', jev: jevSays('sidebar_knowledge', 0.9), askAnswer: NEW_NOTE_LABEL })
+    const r = await routePrompt(f.ports, opts, 'what is TCP backpressure')
+    expect(r.decision).toMatchObject({ route: { jev: 'sidebar_knowledge' } })
+    // an older note without it, and its record
+    const old = await startNote(f.ports, opts, { question: 'old', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 0.5, source: 'ask' } })
     await f.runLater()
-    let t = await f.tree()
-    expect(t.nodes[id]!.tags).toEqual([]) // the fake's summary layer gives no tag
-    const g = fake()
-    const root = await startNote(g.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' }, tag: '網路' })
-    await g.runLater()
-    const child = await startNote(g.ports, opts, { question: 'q2', attach: { kind: 'under', parentId: root }, answerer: 'fork', route: { label: 'followup', confidence: 1, source: 'manual' }, tag: '別的' })
-    await g.runLater()
-    t = await g.tree()
-    expect(t.nodes[root]!.tags).toEqual(['網路'])
-    expect(t.nodes[child]!.tags).toEqual([])
-    expect(t.tags).toEqual(['網路'])
+    await recordFeedback(f.ports, opts, 'old', { decision: { kind: 'main' }, verdict: { route: { label: 'project_question', confidence: 0.5 }, isFollowup: 0, needsProjectCtx: 1 }, asked: true, choice: 'new', parentTitle: null }, old)
+    expect((await f.tree()).nodes[old]!.route.jev).toBeUndefined()
+    await prepare(f.ports)
+    expect((await f.tree()).nodes[old]!.route.jev).toBe('project_question')
   })
 
   test('the old 在主線回答 bookmarks go at session start; answered notes stay', async () => {

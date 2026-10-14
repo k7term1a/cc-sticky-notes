@@ -7,7 +7,7 @@ import type { AskChoice, FeedbackRecord, Tree, TreeNode } from '../types'
 import { answerSide } from './answer'
 import { digestDue, FACTS_FOR_JEV, lastExchanges, readDigest, readFacts, runDigest } from './context'
 import { titleAndSummary } from './digest'
-import { getRecord, makeRecord, recordId, saveRecord, setChoice } from './feedback'
+import { getRecord, listRecords, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
 import { pullNotes, pushNote, type SyncPorts } from './notion'
 import type { Ports } from './ports'
@@ -15,7 +15,7 @@ import { asEffort, claudeProvider } from './providers/claude'
 import { asContextMode, asReasoningEffort, openaiProvider, type OpenAIReasoningEffort } from './providers/openai'
 import { withFallback, type SummaryProvider } from './providers/types'
 import { askPrompt, choiceOf, decide, decideFromChoice, NEEDS_CTX_AT, pickPrompt, type Decision, type Suggested } from './route'
-import { addNode, addTag, removeNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
+import { addNode, removeNode, loadTree, migrateLegacy, mutateTree, normalizeRoot, sideHistory, updateNode, type Attach } from './tree'
 
 export type Options = {
   routeThreshold: number
@@ -106,6 +106,20 @@ export async function prepare(p: Ports): Promise<Tree> {
   if (bookmarks.length > 0) {
     await mutateTree(p.store, root, t => bookmarks.reduce((acc, n) => removeNode(acc, n.id), t))
     p.ui.log(`sticky-notes: removed ${bookmarks.length} old 在主線回答 bookmarks`, 'debug')
+  }
+  // notes made before the card showed Jev's call: it is in their feedback record
+  const unknown = Object.values(tree.nodes).filter(n => n.route.jev === undefined && n.route.source !== 'manual')
+  if (unknown.length > 0) {
+    const byNode = new Map<string, string>()
+    for (const r of await listRecords(p.store, root)) if (r.nodeId) byNode.set(r.nodeId, r.jev.route)
+    const found = unknown.filter(n => byNode.has(n.id))
+    if (found.length > 0) {
+      await mutateTree(p.store, root, t => {
+        const nodes = { ...t.nodes }
+        for (const n of found) if (nodes[n.id]) nodes[n.id] = { ...nodes[n.id]!, route: { ...nodes[n.id]!.route, jev: byNode.get(n.id) } }
+        return { ...t, nodes }
+      })
+    }
   }
   return refresh(p)
 }
@@ -401,7 +415,7 @@ export type NoteRequest = {
   question: string
   attach: Attach
   answerer: 'fork' | 'summary-provider'
-  route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual' }
+  route: { label: string; confidence: number; source: 'jev' | 'ask' | 'manual'; jev?: string }
   tag?: string
 }
 
@@ -470,14 +484,8 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
       return
     }
     await change(p, t => updateNode(t, id, { answer: a.text, answeredBy: a.answeredBy }))
-    const ts = await titleAndSummary(provider, req.question, a.text, (await refresh(p)).tags)
-    // the tag is the topic's: a first question gets one (Jev's pick, else the summary layer's); a follow-up keeps its root's
-    await change(p, t => {
-      const node = t.nodes[id]
-      const tag = node && node.parentId === null ? (req.tag ?? ts.tag) : undefined
-      const next = updateNode(t, id, { title: ts.title, summary: ts.summary, ...(tag ? { tags: [tag] } : {}) })
-      return tag ? addTag(next, tag) : next
-    })
+    const ts = await titleAndSummary(provider, req.question, a.text)
+    await change(p, t => updateNode(t, id, { title: ts.title, summary: ts.summary }))
     await p.state.addUnread(1)
     // M1 (PLAN.md): the answer is shown with $.ui.log — a dim transcript line the model never reads.
     // $.ui.log is plain text (no Markdown): one clean line here, the rendered answer in the pane.

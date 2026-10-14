@@ -7,7 +7,7 @@
 //  │ TCP 背壓　10/07 11:01                             │
 //  ╰──────────────────────────────────────────────────╯
 //  ╭──────────────────────────────────────────────────╮   open: the thread as a conversation,
-//  │ 樹載入原因                  資料結構 · 10/07 10:41 · 3 │   no Q/A words — the question is a
+//  │ 樹載入原因               [知識旁問] 10/07 10:41 · 3 │   no Q/A words — the question is a
 //  │              ✎ ╭ 為什麼載入便利貼樹要讀… ╮       │   prompt bubble on the right (✎ under
 //  │ <answer>                                         │   the pointer rewrites it), the answer
 //  │ ● 為何全讀節點   ○ 存成一個 JSON                   │   under it; several follow-ups: pick
@@ -19,6 +19,7 @@
 import type { ElementTable, RenderElement, RenderSurface } from 'claude-code'
 
 import type { Tree, TreeNode } from '../types'
+import { ROUTE_NAME } from './route'
 import { pathTo, rootOf } from './tree'
 
 export const PANE_ID = 'sticky'
@@ -122,24 +123,24 @@ export type PaneActions = {
 }
 
 /**
- * Tag backgrounds: translucent, so the text stays legible on the dark theme and the light
- * one; a tag always gets the same one (by its characters), different tags mostly differ.
+ * The card's category: what Jev called the first question (the developer, 10/14), in the
+ * dialog's words. Translucent backgrounds, legible on the dark theme and the light one.
  */
-export const TAG_COLORS = ['#7F77DD40', '#1D9E7540', '#D85A3040', '#378ADD40', '#BA751740', '#D4537E40'] as const
-
-export function tagColor(tag: string): string {
-  let h = 0
-  for (const ch of tag) h = (h * 31 + ch.codePointAt(0)!) >>> 0
-  return TAG_COLORS[h % TAG_COLORS.length]!
+export const CATEGORY: Record<string, { name: string; color: string }> = {
+  sidebar_knowledge: { name: ROUTE_NAME.sidebar_knowledge, color: '#378ADD40' },
+  project_question: { name: ROUTE_NAME.project_question, color: '#1D9E7540' },
+  main_task: { name: ROUTE_NAME.main_task, color: '#BA751740' },
 }
 
-/** The topic tag as a chip: its own background on Desktop; the terminal has no translucency, so it is dim. */
-function tagChip(els: ElementTable, surface: RenderSurface, key: string, tag: string): RenderElement {
+/** The category as a chip: its own background on Desktop; the terminal has no translucency, so it is dim. */
+function categoryChip(els: ElementTable, surface: RenderSurface, key: string, jev: string | undefined): RenderElement | null {
   const { Text } = els
+  const c = jev ? CATEGORY[jev] : undefined
+  if (!c) return null
   return surface === 'terminal' ? (
-    <Text key={key} dimColor>{`#${tag}`}</Text>
+    <Text key={key} dimColor>{`[${c.name}]`}</Text>
   ) : (
-    <Text key={key} backgroundColor={tagColor(tag)}>{` ${tag} `}</Text>
+    <Text key={key} backgroundColor={c.color}>{` ${c.name} `}</Text>
   )
 }
 
@@ -282,7 +283,7 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
           const n = countAll(tree, id)
           const meta = `${when(root.anchor.at)}${n > 0 ? ` · ${n + 1}` : ''}`
           const frame = following ? { borderColor: 'success' } : { borderDimColor: true }
-          const tag = root.tags[0] ? tagChip(els, d.surface, `tag:${id}`, root.tags[0]) : null
+          const tag = categoryChip(els, d.surface, `category:${id}`, root.route.jev)
 
           if (!open) {
             // closed: one line. A Button holds one plain string (no colored part), so the tag is its
