@@ -96,6 +96,22 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 我傾向 **(b)**：比 (a) 少一個對話框，最後一個選項順便收集「分錯」的回饋（接上 D15 的回饋接口）。RC4 的轉圈要等你在 B 上實際看過可不可以接受。另外，答案字數上限（300 字以上會不會被截）可以再補一個探針。
 
+## 〇之八、Desktop 改版後的 UI 位置（10/15，第一輪）
+
+暫時的 `/sn ui-probe`（commit `d0f286c`）：每個位置標上 10/07 ui-demo 的字母，記下 Desktop 第一次跟 mod 要每個位置的時間，以及 pane 收到的參數。Claude Code 2.1.295（Desktop 內建），Desktop App 有 9/29 起的新版輸入框卡片。
+
+**Desktop 這次有跟 mod 要的**：Spinner（E）、UserMessage（F）、CommandOutput（H）、ToolUse、ToolResult、AbovePrompt（A）、Pane。
+
+**沒有要的**：AssistantMessage（G，10/07 有）、SessionMode（B2，10/07 有）、PromptHint（C2，10/07 就沒有）、TurnDuration、InfoNotice。⚠ G、B2 這兩個可能是這一輪沒觸發到，也可能是新版不再要；第二輪在新 session 從頭開著探針再確認。
+
+**狀態列（D）**：`$.ui.status` 照樣畫在輸入框下方右側；你的判斷是沒有更好的地方放。
+
+**pane 收到的參數**：`{ title, isFocused, bodyColumns: 56, placement: 'dock', scroll: { offset, bodyRows: 51 }, view }`。`scroll` 的形狀變了（10/07 是 `{ top, bodyRows, contentRows }`），mod 沒有用到它，不影響。
+
+**Desktop 9–10 月的改版**（官方 changelog）：9/29 輸入框改成新的卡片樣式（+ 選單排第一，在權限模式和模型前面）；9/15 Code 分頁改用標準的模型選單、effort 成為獨立控制；9/02 加了 Split View、側邊 pane 可以開成獨立視窗。沒有提到狀態列或 mod 的變動。
+
+**注意**：探針的開關存在 mod 的共用資料裡，所以同一台電腦上其他開著的 session 也會一起記錄；這一輪的紀錄混了不只一個 session。
+
 ## 〇之七、遠端（手機、筆電）與 R1 / R5 探針（10/14）
 
 暫時的 `/sn probe …`（`register.tsx`，commit `5b40d7b`），紀錄在 `$.store` 的 `probe:log`。探完已刪除（10/14）；`$.store` 裡的 `probe:*` 幾個 key 留著，不影響運作。A 是跑 session 的 Windows 電腦（Claude Desktop，Remote Control 開著）。
