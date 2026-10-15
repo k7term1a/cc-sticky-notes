@@ -184,19 +184,3 @@ test('R4: the project context card shows the digest and edits the facts', async 
   expect(await pane.find({ type: 'Text', text: /^1\. 部署前先跑 migration（手動）$/ })).toBeDefined()
   await pane.unmount()
 })
-
-test('TEMP /sn ui-probe: on marks the sites and logs what is asked; log prints it', async ($, on) => {
-  mock.store(on)
-  on('session.id', () => ({ value: 'S1' }))
-  on('session.surfaces', () => ({ value: ['desktop'] }) as never)
-  on('ui.status', () => ({ value: undefined }) as never)
-  on('ui.toast', () => ({ value: undefined }) as never)
-  on('ui.log', () => ({ value: undefined }) as never)
-  expect(await $.command.run({ command: 'sn', args: 'ui-probe' } as never)).toMatchObject({ text: expect.stringContaining('〔H〕') })
-  const above = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', requestId: 'above', props: {} as never })
-  expect(await above.find({ type: 'Text', text: /〔A〕AbovePrompt/ })).toBeDefined()
-  await above.unmount()
-  const log = (await $.command.run({ command: 'sn', args: 'ui-probe log' } as never)) as { text: string }
-  expect(log.text).toContain('"component":"AbovePrompt"')
-  await $.command.run({ command: 'sn', args: 'ui-probe' } as never)
-})

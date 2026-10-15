@@ -112,6 +112,10 @@ PLAN.md 以外的新需求（R1 傳送到另一個對話、R2 輔助遠端操作
 
 **注意**：探針的開關存在 mod 的共用資料裡，所以同一台電腦上其他開著的 session 也會一起記錄；這一輪的紀錄混了不只一個 session。
 
+**第二輪（同一個 session，截圖）**：看得到〔F〕〔K〕〔H〕〔H2〕，回覆下方仍沒有〔G〕。新 session 從頭開著探針的那輪沒做；你決定狀態維持在輸入框下方的狀態列（D），G、B2 是否還在就不再追。探針已刪除（10/15）。
+
+**Desktop 的 session 資訊側邊欄**（10/08 起，Environment／Context／Connectors／Changes）是 Desktop 自己畫的，mod 畫不進去、也讀不到；其中專案、分支、context 用量 mod 用自己的 API 拿得到，Remote Control 開關拿不到。
+
 ## 〇之七、遠端（手機、筆電）與 R1 / R5 探針（10/14）
 
 暫時的 `/sn probe …`（`register.tsx`，commit `5b40d7b`），紀錄在 `$.store` 的 `probe:log`。探完已刪除（10/14）；`$.store` 裡的 `probe:*` 幾個 key 留著，不影響運作。A 是跑 session 的 Windows 電腦（Claude Desktop，Remote Control 開著）。

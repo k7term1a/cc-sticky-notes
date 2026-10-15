@@ -225,77 +225,6 @@ async function followUp($: EngineInterface, opts: Options, parentId: string, que
   })
 }
 
-// ---- TEMP /sn ui-probe (10/15, Desktop's new UI): which sites Desktop still asks the mod to
-// draw, each marked with the letter it had in the 10/07 ui-demo (PROBE.md〇之五), and what the
-// pane is handed. Logged to $.store uiprobe:log; /sn ui-probe log prints it. Remove after. ----
-const UIPROBE_ON = 'uiprobe:on'
-const UIPROBE_LOG = 'uiprobe:log'
-const uiprobeSeen = new Set<string>()
-
-async function uiprobeOn($: EngineInterface): Promise<boolean> {
-  return (await $.store.get(UIPROBE_ON)) === true
-}
-
-async function uiprobeLog($: EngineInterface, entry: Record<string, unknown>) {
-  const list = ((await $.store.get(UIPROBE_LOG)) as unknown[] | undefined) ?? []
-  list.push({ at: new Date().toISOString().slice(11, 19), ...entry })
-  await $.store.set(UIPROBE_LOG, list.slice(-200) as never)
-}
-
-/** One site: logged the first time each surface asks; `mark` draws its letter (own tree or under the original). */
-async function uiprobeSite(
-  $: EngineInterface,
-  e: Parameters<EngineInterface['ui']['resolve']>[0] & { component: string },
-  next: () => Promise<unknown>,
-  mark: { letter: string; own: boolean } | null,
-) {
-  let drawn: unknown = null
-  try {
-    drawn = await next()
-  } catch {
-    // nothing beneath draws this site (the test kit): the mark stands alone
-  }
-  if (!(await uiprobeOn($))) return drawn
-  const k = `${e.surface}:${e.component}`
-  if (!uiprobeSeen.has(k)) {
-    uiprobeSeen.add(k)
-    await uiprobeLog($, { surface: e.surface, component: e.component, letter: mark?.letter ?? null })
-  }
-  if (mark === null) return drawn
-  const { Box, Text } = $.ui.resolve(e)
-  const tag = <Text color="claude">{`〔${mark.letter}〕${e.component}`}</Text>
-  if (mark.own || drawn === null || drawn === undefined) return tag
-  return (
-    <Box flexDirection="column">
-      {drawn as never}
-      {tag}
-    </Box>
-  )
-}
-
-async function uiprobeCommand($: EngineInterface, args: string): Promise<{ text?: string } | null> {
-  const m = /^ui-probe(?:\s+(\S+))?$/.exec(args.trim())
-  if (!m) return null
-  const sub = m[1] ?? ''
-  if (sub === 'log') {
-    const list = ((await $.store.get(UIPROBE_LOG)) as Record<string, unknown>[] | undefined) ?? []
-    return { text: list.map(x => JSON.stringify(x)).join('\n') || '[ui-probe] 沒有紀錄' }
-  }
-  if (await uiprobeOn($)) {
-    await $.store.set(UIPROBE_ON, false)
-    await refreshStatus($)
-    return { text: '[ui-probe] 關閉' }
-  }
-  await $.store.set(UIPROBE_ON, true)
-  await $.store.set(UIPROBE_LOG, [] as never)
-  uiprobeSeen.clear()
-  $.ui.status('〔D〕$.ui.status 狀態列')
-  $.ui.toast('〔J〕$.ui.toast')
-  $.ui.log('〔K〕$.ui.log 灰字')
-  await uiprobeLog($, { event: 'on', surfaces: await $.session.surfaces() })
-  return { text: '〔H〕CommandOutput：這是指令輸出。送一句話、等 Claude 回答完，看畫面上出現哪些〔字母〕，再打 /sn ui-probe log。' }
-}
-
 export const register: Register = (on, options) => {
   const opts = readOptions(options)
 
@@ -380,36 +309,11 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('command.run', { command: COMMAND }, async ($, e) => (await uiprobeCommand($, e.args)) ?? runCommand(portsOf($), opts, e.args))
+  on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
   // /sn: the keyboard shortcut for the pane (the status line cannot be clicked; PROBE.md)
-  on('command.run', { command: SHORT_COMMAND }, async ($, e) => (await uiprobeCommand($, e.args)) ?? runCommand(portsOf($), opts, e.args))
-
-  // TEMP ui-probe: every site, letters as in the 10/07 ui-demo
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'A', own: true }) as never)
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'B2', own: true }) as never)
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'C2', own: true }) as never)
-  on('ui.render', { component: 'Spinner' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'E', own: false }) as never)
-  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'F', own: false }) as never)
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'G', own: false }) as never)
-  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'H2', own: false }) as never)
-  on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'L', own: false }) as never)
-  on('ui.render', { component: 'InfoNotice' }, async ($, e, next) => uiprobeSite($, e, () => next(e), { letter: 'M', own: false }) as never)
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => uiprobeSite($, e, () => next(e), null) as never)
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => uiprobeSite($, e, () => next(e), null) as never)
-  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => uiprobeSite($, e, () => next(e), null) as never)
-  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => uiprobeSite($, e, () => next(e), null) as never)
-  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => uiprobeSite($, e, () => next(e), null) as never)
+  on('command.run', { command: SHORT_COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
-    if (await uiprobeOn($)) {
-      // TEMP ui-probe: what the pane is handed (placement, width, focus, scroll)
-      const props = e.props as Record<string, unknown>
-      const k = `${e.surface}:Pane`
-      if (!uiprobeSeen.has(k)) {
-        uiprobeSeen.add(k)
-        await uiprobeLog($, { surface: e.surface, component: 'Pane', props: JSON.stringify(props).slice(0, 400) })
-      }
-    }
     const data = {
       tree: await read($, treeAtom),
       selectedId: await read($, selectedAtom),
