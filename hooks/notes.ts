@@ -27,7 +27,7 @@ export type Options = {
   openaiReasoningEffort: OpenAIReasoningEffort
   openaiContextMode: 'off' | 'redacted' | 'full'
   autoOpenPane: boolean
-  /** Jev reads each prompt and may ask (the mod's main switch, /sn on|off); off, everything goes to the main line. */
+  /** Jev reads each prompt and may ask (the mod's main switch, /sn on|off); off (the default), everything goes to the main line. */
   routing: boolean
   /** Notes sync with Notion when a data source is set; off keeps the data source but sends nothing. */
   notionSync: boolean
@@ -52,7 +52,7 @@ export function readOptions(o: PluginOptions): Options {
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
     autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
-    routing: true,
+    routing: o.routing === true, // paused unless turned on (the developer, 10/19): /sn on, the settings card
     notionSync: true,
     notionDataSource: typeof o.notionDataSource === 'string' ? o.notionDataSource.trim() : '',
     askTimeout: Math.max(0, Math.floor(num(o.askTimeout, 30))), // 30 s (the developer, 10/14)

@@ -7,6 +7,12 @@
   "description": "cc-sticky-notes: route curiosity questions to a side pane instead of the main conversation",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "routing": {
+      "type": "boolean",
+      "title": "Automatic routing",
+      "default": false,
+      "description": "Jev reads each prompt and may ask whether it becomes a sticky note. Off (the default), every prompt goes to the main line; /sn on or the pane's settings card turns it on per machine."
+    },
     "routeThreshold": {
       "type": "number",
       "title": "Route threshold",

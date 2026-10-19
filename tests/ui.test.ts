@@ -199,10 +199,11 @@ test('the settings card flips the mod\'s switches; /sn off pauses the routing', 
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
   await pane.press({ key: 'open:settings' })
-  expect(await pane.find({ type: 'Button', label: '● 開' } as never)).toBeDefined()
+  // paused by default
+  expect(await pane.find({ key: 'set-btn:routing' } as never)).toMatchObject({ props: { label: '○ 關' } })
   await pane.press({ key: 'set-btn:routing' })
   await pane.press({ key: 'set-btn:timeout' })
-  expect(await pane.find({ key: 'set-btn:routing' } as never)).toMatchObject({ props: { label: '○ 關' } })
+  expect(await pane.find({ key: 'set-btn:routing' } as never)).toMatchObject({ props: { label: '● 開' } })
   expect(await pane.find({ key: 'set-btn:timeout' } as never)).toMatchObject({ props: { label: '60 秒' } })
   await pane.unmount()
   // /sn on turns it back; the store keeps it for the next session
