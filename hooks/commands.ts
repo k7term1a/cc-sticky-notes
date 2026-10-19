@@ -6,7 +6,7 @@ import type { CommandRunResult } from 'claude-code'
 import { addFacts, contextKey, readDigest, readFacts } from './context'
 import { calibrate, formatCalibration, listRecords, parseFeedback } from './feedback'
 import { notionProbe } from './notion'
-import { change, confirmDelete, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
+import { change, confirmDelete, refresh, digestNow, digestWords, dropReason, syncPull, syncPushAll, syncStatus, giveFeedback, projectKey, startNote, type Options } from './notes'
 import type { Ports } from './ports'
 import { setActive } from './tree'
 
@@ -14,7 +14,7 @@ export const COMMAND = 'sticky-note'
 
 export const COMMAND_SPEC = {
   name: COMMAND,
-  description: 'Sticky Notes: open/close the pane, or new | back | rm | timeout | provider | every | ctx | notion | feedback | calibrate | doctor',
+  description: 'Sticky Notes: open/close the pane, or on | off | new | back | rm | timeout | provider | every | ctx | notion | feedback | calibrate | doctor',
   argumentHint: '[new <問題> | back | provider claude|openai | every <n> | ctx [add <文字> | rm <n> | refresh] | feedback … | calibrate]',
 }
 
@@ -81,10 +81,21 @@ export async function runCommand(p: Ports, opts: Options, args: string): Promise
       p.ui.toast(dropReason(rest))
       return {}
     }
+    case 'on':
+    case 'off': {
+      // the mod's main switch: off, Jev reads nothing and no dialog shows; notes stay, /sn new works
+      const on = sub === 'on'
+      const r = await p.setOption('routing', on)
+      if (!r.ok) return { text: `沒有改成功：${r.reason}` }
+      opts.routing = on
+      await p.state.contextChanged()
+      await p.state.publishTree(await refresh(p)) // the status line says 已暫停 / not
+      return { text: on ? 'Sticky Notes 開啟：Jev 會判斷每一句，必要時跳對話框。' : 'Sticky Notes 暫停：每一句都直接進主線，不送 Jev、不跳對話框。便利貼和 /sn new 照常可用；/sn on 恢復。' }
+    }
     case 'rm': {
       // the note the pane has open (its thread runs through it), as ✕ does
       const id = await p.state.selected()
-      if (id === null || id === '__context__') return { text: '先在 pane 點開要刪的便利貼（或在問題旁按 ✕）' }
+      if (id === null || id.startsWith('__')) return { text: '先在 pane 點開要刪的便利貼（或在問題旁按 ✕）' }
       const n = await confirmDelete(p, opts, id)
       return n > 0 ? {} : { text: '沒有刪除' }
     }

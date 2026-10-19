@@ -4,7 +4,7 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { applyOptionOverrides, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, syncing, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
 import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
 import type { Ports } from './ports'
@@ -44,7 +44,7 @@ const kvOf = ($: EngineInterface) => ({
  * before it. Redrawn when a count, the tree or the pending number changes.
  */
 async function refreshStatus($: EngineInterface) {
-  $.ui.status(usageLine(await readUsage(kvOf($), new Date()), await read($, pendingAtom)))
+  $.ui.status(usageLine(await readUsage(kvOf($), new Date()), await read($, pendingAtom), !currentOpts.routing))
 }
 
 /** Adds one request's cost to today's count; a failure to count never fails the request. */
@@ -177,7 +177,20 @@ async function selectNode($: EngineInterface, id: string | null) {
 /** R4: what the project context card shows; read on each draw (contextRev makes it draw again). */
 async function contextData($: EngineInterface, opts: Options) {
   await read($, contextRevAtom)
-  const how = { digestEvery: opts.digestEvery, provider: opts.summaryProvider, digestStatus: await read($, digestStatusAtom) }
+  const how = {
+    digestEvery: opts.digestEvery,
+    provider: opts.summaryProvider,
+    digestStatus: await read($, digestStatusAtom),
+    settings: {
+      routing: opts.routing,
+      autoOpenPane: opts.autoOpenPane,
+      notionSync: opts.notionSync,
+      notionSet: opts.notionDataSource !== '',
+      digestEvery: opts.digestEvery,
+      askTimeout: opts.askTimeout,
+      provider: opts.summaryProvider,
+    },
+  }
   try {
     const p = portsOf($)
     const root = await projectKey(p)
@@ -225,8 +238,12 @@ async function followUp($: EngineInterface, opts: Options, parentId: string, que
   })
 }
 
+/** The session's options, for refreshStatus (outside register's closure). */
+let currentOpts: Options = readOptions({})
+
 export const register: Register = (on, options) => {
   const opts = readOptions(options)
+  currentOpts = opts
 
   on('session.start', async ($, e, next) => {
     await applyOptionOverrides(kvOf($), opts)
@@ -235,7 +252,7 @@ export const register: Register = (on, options) => {
     const p = portsOf($)
     await prepare(p)
     // the notes other computers made in this project (Notion), in the background
-    if (opts.notionDataSource !== '') p.later(() => void syncPull(p, opts))
+    if (syncing(opts)) p.later(() => void syncPull(p, opts))
     return next(e)
   })
 
@@ -279,6 +296,8 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     // Only the person's own typed prompts are routed; notifications, peers and plugins pass.
     if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)
+    // the mod's main switch (/sn off, the settings card): everything to the main line, no Jev
+    if (!opts.routing) return next(e)
     if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
 
     const p = portsOf($)
@@ -336,6 +355,17 @@ export const register: Register = (on, options) => {
       refreshDigest: () => {
         const p = portsOf($)
         p.later(() => void digestNow(p, opts, true))
+      },
+      // the settings card: this machine's own setting, at once
+      setSetting: (field, value) => {
+        const p = portsOf($)
+        void (async () => {
+          const r = await p.setOption(field, value)
+          if (!r.ok) return p.ui.toast(`Sticky Notes：沒有改成功（${r.reason}）`)
+          ;(opts as Record<string, unknown>)[field] = value
+          await p.state.contextChanged()
+          await refreshStatus($)
+        })()
       },
     })
   })

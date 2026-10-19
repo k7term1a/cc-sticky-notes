@@ -26,6 +26,21 @@ export const PANE_ID = 'sticky'
 export const PANE_TITLE = 'Sticky Notes'
 /** The selection that opens the project-context card (R4) instead of a topic. */
 export const CONTEXT_CARD = '__context__'
+/** The selection that opens the settings card (the mod's switches, 10/19). */
+export const SETTINGS_CARD = '__settings__'
+
+/** The switches the settings card shows, as this machine has them. */
+export type Settings = {
+  routing: boolean
+  autoOpenPane: boolean
+  notionSync: boolean
+  /** A Notion data source is set (the sync switch means nothing without one). */
+  notionSet: boolean
+  digestEvery: number
+  askTimeout: number
+  provider: 'claude' | 'openai'
+}
+export type SettingField = 'routing' | 'autoOpenPane' | 'notionSync' | 'digestEvery' | 'askTimeout' | 'summaryProvider'
 
 /** P9: an answer that did not come from the fork had no project context. */
 export function contextMark(n: TreeNode): string {
@@ -105,6 +120,7 @@ export type PaneData = {
   provider: 'claude' | 'openai'
   /** The last digest run of this session: running, or when it ended and how (in words). */
   digestStatus: { running: boolean; at: number | null; result: string | null }
+  settings: Settings
 }
 
 export type PaneActions = {
@@ -122,6 +138,54 @@ export type PaneActions = {
   addFact(text: string): void
   removeFact(id: string): void
   refreshDigest(): void
+  /** The settings card: one switch or choice, this machine's own, at once. */
+  setSetting(field: SettingField, value: string | number | boolean): void
+}
+
+/** Choices a setting cycles through on each press (a Button is the one control every surface draws). */
+const DIGEST_STEPS = [0, 1, 3, 5, 10]
+const TIMEOUT_STEPS = [0, 15, 30, 60, 120]
+const nextOf = (steps: readonly number[], now: number) => steps[(steps.indexOf(now) + 1) % steps.length] ?? steps[0]!
+
+/**
+ * The settings card, last in the pane: the mod's switches (what Desktop's own environment
+ * panel cannot hold). Each row is a name and a press that flips or steps it.
+ */
+function settingsCard(els: ElementTable, d: PaneData, act: PaneActions): RenderElement {
+  const { Box, Text, Button } = els
+  const s = d.settings
+  const open = d.selectedId === SETTINGS_CARD
+  if (!open) {
+    return (
+      <Box key="card:settings" borderStyle="round" borderDimColor paddingX={1}>
+        <Button key="open:settings" plain dimColor label={`設定　${s.routing ? '自動判斷開' : '已暫停'}`} onPress={() => act.select(SETTINGS_CARD)} />
+      </Box>
+    )
+  }
+  const onOff = (v: boolean) => (v ? '● 開' : '○ 關')
+  const row = (key: string, name: string, value: string, press: () => void, note?: string) => (
+    <Box key={`set:${key}`} flexDirection="row" alignItems="center" columnGap={1}>
+      <Box flexGrow={1} flexDirection="column">
+        <Text>{name}</Text>
+        {note !== undefined && <Text dimColor>{note}</Text>}
+      </Box>
+      <Button key={`set-btn:${key}`} label={value} onPress={press} />
+    </Box>
+  )
+  return (
+    <Box key="card:settings" flexDirection="column" borderStyle="round" borderDimColor paddingX={1} gap={1}>
+      <Button key="close:settings" plain label="設定" onPress={() => act.select(null)} />
+      {row('routing', '自動判斷', onOff(s.routing), () => act.setSetting('routing', !s.routing), '關掉後每一句都直接進主線，不送 Jev、不跳對話框')}
+      {row('timeout', '對話框逾時', s.askTimeout > 0 ? `${s.askTimeout} 秒` : '一直等', () => act.setSetting('askTimeout', nextOf(TIMEOUT_STEPS, s.askTimeout)))}
+      {row('autoOpen', '答案回來時打開 pane', onOff(s.autoOpenPane), () => act.setSetting('autoOpenPane', !s.autoOpenPane))}
+      {row('digest', '背景統整', s.digestEvery > 0 ? `每 ${s.digestEvery} 回合` : '關', () => act.setSetting('digestEvery', nextOf(DIGEST_STEPS, s.digestEvery)))}
+      {row('provider', '統整層', s.provider === 'openai' ? 'OpenAI' : 'Claude', () => act.setSetting('summaryProvider', s.provider === 'openai' ? 'claude' : 'openai'))}
+      {s.notionSet
+        ? row('notion', 'Notion 同步', onOff(s.notionSync), () => act.setSetting('notionSync', !s.notionSync))
+        : row('notion', 'Notion 同步', '未設定', () => {}, '用 /sn notion <collection://…> 設定資料庫')}
+      <Text dimColor>只影響這台電腦；按鈕按一下就換到下一個值。</Text>
+    </Box>
+  )
 }
 
 /**
@@ -365,6 +429,7 @@ export function paneView(els: ElementTable, d: PaneData, act: PaneActions): Rend
         })}
 
       {contextCard(els, d, act)}
+      {settingsCard(els, d, act)}
     </Box>
   )
 }

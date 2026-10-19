@@ -27,6 +27,10 @@ export type Options = {
   openaiReasoningEffort: OpenAIReasoningEffort
   openaiContextMode: 'off' | 'redacted' | 'full'
   autoOpenPane: boolean
+  /** Jev reads each prompt and may ask (the mod's main switch, /sn on|off); off, everything goes to the main line. */
+  routing: boolean
+  /** Notes sync with Notion when a data source is set; off keeps the data source but sends nothing. */
+  notionSync: boolean
   /** R4: the main-line digest and the project context every this many main turns; 0 turns them off. */
   digestEvery: number
   /** The Notion data source the notes sync to (collection://…); '' turns the sync off. */
@@ -48,6 +52,8 @@ export function readOptions(o: PluginOptions): Options {
     openaiReasoningEffort: asReasoningEffort(o.openaiReasoningEffort),
     openaiContextMode: asContextMode(o.openaiContextMode),
     autoOpenPane: o.autoOpenPane !== false, // default on (the developer's pick, 10/07)
+    routing: true,
+    notionSync: true,
     notionDataSource: typeof o.notionDataSource === 'string' ? o.notionDataSource.trim() : '',
     askTimeout: Math.max(0, Math.floor(num(o.askTimeout, 30))), // 30 s (the developer, 10/14)
     digestEvery: Math.max(0, Math.floor(num(o.digestEvery, 3))), // every 3 turns (the developer's pick, 10/14)
@@ -55,7 +61,8 @@ export function readOptions(o: PluginOptions): Options {
 }
 
 /** What /sn provider, /sn every and /sn notion set, kept per machine in $.store over the plugin settings. */
-export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource', 'askTimeout'] as const
+export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource', 'askTimeout', 'routing', 'notionSync', 'autoOpenPane'] as const
+export type OverridableField = (typeof OVERRIDABLE)[number]
 export const optionKey = (field: (typeof OVERRIDABLE)[number]) => 'option:' + field
 
 /** Puts this machine's own settings (optionKey) over the plugin's, in place. */
@@ -68,7 +75,14 @@ export async function applyOptionOverrides(kv: { get(key: string): Promise<unkno
   if (typeof notion === 'string') opts.notionDataSource = notion
   const timeout = await kv.get(optionKey('askTimeout'))
   if (typeof timeout === 'number' && Number.isInteger(timeout) && timeout >= 0) opts.askTimeout = timeout
+  for (const field of ['routing', 'notionSync', 'autoOpenPane'] as const) {
+    const v = await kv.get(optionKey(field))
+    if (typeof v === 'boolean') opts[field] = v
+  }
 }
+
+/** Whether notes go to (and come from) Notion now: a data source, and the switch on. */
+export const syncing = (opts: Options) => opts.notionSync && opts.notionDataSource !== ''
 
 /** The configured summary provider; openai without a key falls back to claude with one toast. */
 export function summaryProvider(p: Ports, opts: Options): SummaryProvider {
@@ -527,7 +541,7 @@ export async function answerNote(p: Ports, opts: Options, id: string, req: NoteR
     p.ui.toast(`cc-sticky-note ${ts.title}`)
     if (opts.autoOpenPane) await p.ui.openPane()
     // the answered note goes to Notion for the other computers, in the background
-    if (opts.notionDataSource !== '') p.later(() => void syncPush(p, opts, id))
+    if (syncing(opts)) p.later(() => void syncPush(p, opts, id))
   } finally {
     await p.state.addPending(-1)
   }
@@ -554,7 +568,7 @@ export async function deleteNote(p: Ports, opts: Options, id: string): Promise<n
   await change(p, t => removeNode(t, id))
   const selected = await p.state.selected()
   if (selected !== null && gone.includes(selected)) await p.state.setSelected(parent)
-  if (opts.notionDataSource !== '') p.later(() => void markUnsynced(syncPorts(p), opts.notionDataSource, gone))
+  if (syncing(opts)) p.later(() => void markUnsynced(syncPorts(p), opts.notionDataSource, gone))
   return gone.length
 }
 

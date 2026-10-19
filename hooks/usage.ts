@@ -55,8 +55,8 @@ export function shortCount(n: number): string {
  * "今日 Jev 12 次 · Claude 34k · OpenAI 8k", OpenAI only once it was used,
  * and "· 2 則回答中" while answers are pending.
  */
-export function usageLine(u: Usage, pending: number): string {
-  const parts = [`今日 Jev ${u.jev} 次`, `Claude ${shortCount(u.claude)}`]
+export function usageLine(u: Usage, pending: number, paused = false): string {
+  const parts = [...(paused ? ['已暫停'] : []), `今日 Jev ${u.jev} 次`, `Claude ${shortCount(u.claude)}`]
   if (u.openai > 0) parts.push(`OpenAI ${shortCount(u.openai)}`)
   if (pending > 0) parts.push(`${pending} 則回答中`)
   return parts.join(' · ')
