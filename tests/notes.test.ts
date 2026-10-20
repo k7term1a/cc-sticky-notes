@@ -3,10 +3,10 @@ import type { HttpInit, HttpResponse, SessionMessage } from 'claude-code'
 
 import type { FeedbackRecord, Tree } from '../types'
 import { listRecords } from '../hooks/feedback'
-import { addFacts, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
+import { addFacts, FACTS_KEPT, digestDue, digestInput, lastExchanges, parseDigest, readDigest, readFacts } from '../hooks/context'
 import { runCommand } from '../hooks/commands'
 import { notionServer, projectName } from '../hooks/notion'
-import { applyOptionOverrides, confirmDelete, deleteNote, prepare, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
+import { applyOptionOverrides, checkRules, confirmDelete, deleteNote, prepare, syncPull, syncPushAll, digestNow, digestWords, explainDrop, giveFeedback, plainPreview, readOptions, recordFeedback, routePrompt, startNote, summaryProvider } from '../hooks/notes'
 import { addUsage, claudeDelta, fetchDelta, readUsage, shortCount, usageKey, usageLine } from '../hooks/usage'
 import type { KV, Ports } from '../hooks/ports'
 import { MAIN_LABEL, NEW_NOTE_LABEL, OTHER_NOTE_LABEL } from '../hooks/route'
@@ -22,6 +22,8 @@ type Fake = {
   openaiBodies: string[]
   contextChanges: () => number
   digestRuns: { running: boolean; result: string | null }[]
+  reminders: ({ prompt: string; at: number } | null)[]
+  selected(): string | null
   options: Record<string, unknown>
   forkPrompts: string[]
   toasts: string[]
@@ -63,6 +65,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
   let contextChanges = 0
   let selected: string | null = null
   const digestRuns: { running: boolean; result: string | null }[] = []
+  const reminders: ({ prompt: string; at: number } | null)[] = []
   const openaiBodies: string[] = []
   const options: Record<string, unknown> = {}
   let now = 1000
@@ -168,6 +171,7 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
       selected: async () => selected,
       contextChanged: async () => void contextChanges++,
       setDigestStatus: async (running, result) => void digestRuns.push({ running, result }),
+      setReminder: async r => void reminders.push(r),
     },
   }
   return {
@@ -180,6 +184,8 @@ function fake(opts: { jev?: (body: unknown) => unknown; typesafeKey?: string; op
     openaiBodies,
     contextChanges: () => contextChanges,
     digestRuns,
+    reminders,
+    selected: () => selected,
     options,
     forkPrompts,
     toasts,
@@ -403,8 +409,9 @@ describe('notes end to end (stubbed fork and complete)', () => {
 
 describe('R4: the main-line digest and the project context', () => {
   test('due every digestEvery turns; 0 turns it off', () => {
-    expect(digestDue(3, 3, null)).toBe(false) // the first comes with the session's first note
-    expect(digestDue(3, 99, null)).toBe(false)
+    // R7: the first once digestEvery turns are in (or sooner, with the session's first note)
+    expect(digestDue(3, 2, null)).toBe(false)
+    expect(digestDue(3, 3, null)).toBe(true)
     expect(digestDue(3, 5, { text: 'x', turns: 3, at: 0 })).toBe(false)
     expect(digestDue(3, 6, { text: 'x', turns: 3, at: 0 })).toBe(true)
     expect(digestDue(0, 99, null)).toBe(false)
@@ -465,14 +472,16 @@ describe('R4: the main-line digest and the project context', () => {
 
   test('facts: malformed answers are no digest; over the cap the oldest automatic facts go, hand-added ones stay', () => {
     expect(parseDigest('nope')).toBeNull()
-    expect(parseDigest('{"digest":"d","facts":["a","b","c","d"]}')).toEqual({ digest: 'd', facts: ['a', 'b', 'c'] })
+    expect(parseDigest('{"digest":"d","facts":["a","b","c","d"]}')).toEqual({ digest: 'd', facts: [{ text: 'a' }, { text: 'b' }, { text: 'c' }] })
     const fact = (i: number, source: 'auto' | 'manual') => ({ id: String(i), text: `f${i}`, at: i, sessionId: 'S', source })
-    const list = [fact(0, 'manual'), ...Array.from({ length: 59 }, (_, i) => fact(i + 1, 'auto'))]
-    const next = addFacts(list, [fact(100, 'auto'), fact(101, 'auto')])
-    expect(next).toHaveLength(60)
-    expect(next[0]!.source).toBe('manual')
-    expect(next.map(x => x.id)).not.toContain('1')
-    expect(next.at(-1)!.id).toBe('101')
+    // R7: one kept through compaction stays too
+    const list = [fact(0, 'manual'), { ...fact(1, 'auto'), keep: true }, ...Array.from({ length: FACTS_KEPT - 2 }, (_, i) => fact(i + 2, 'auto'))]
+    const next = addFacts(list, [fact(1000, 'auto'), fact(1001, 'auto')])
+    expect(next).toHaveLength(FACTS_KEPT)
+    expect(next.slice(0, 2).map(x => x.id)).toEqual(['0', '1'])
+    expect(next.map(x => x.id)).not.toContain('2')
+    expect(next.map(x => x.id)).not.toContain('3')
+    expect(next.at(-1)!.id).toBe('1001')
   })
 
   test('/sn every and /sn provider write the plugin setting and take effect at once', async () => {
@@ -765,11 +774,57 @@ describe('a new session and the first digest (10/14)', () => {
     expect(f.asked()).toBe(0)
   })
 
-  test('the session\'s first note starts its digest; none before it', async () => {
+  test('the session\'s first note starts its digest at once', async () => {
     const f = fake()
     expect(await readDigest(f.kv, ROOT, 'S1')).toBeNull()
     await startNote(f.ports, opts, { question: 'q', attach: { kind: 'root' }, answerer: 'fork', route: { label: 'new', confidence: 1, source: 'manual' } })
     await f.runLater()
     expect(await readDigest(f.kv, ROOT, 'S1')).toMatchObject({ text: '主線在把 auth 改成 session cookie。' })
+  })
+})
+
+describe('R7: "you broke a rule" (Jev) opens the pane on the rules', () => {
+  const brokeRule = (noul: number) => (body: unknown) => {
+    const q = (body as { questions: Record<string, unknown> }).questions
+    return q.broke_rule ? { answers: { broke_rule: { type: 'noul', noul } } } : undefined
+  }
+  const facts = [
+    { id: 'a', text: '一律用繁體中文回覆', at: 1, sessionId: 'S0', source: 'auto', card: '語言', kind: 'rule', keep: true },
+    { id: 'b', text: '不要自己 push', at: 2, sessionId: 'S0', source: 'auto', card: 'git', kind: 'rule' },
+  ]
+
+  test('heard: the reminder card opens, and the kept rules go with the prompt', async () => {
+    const f = fake({ typesafeKey: 'k', jev: brokeRule(0.92) })
+    await f.kv.set(`context:${ROOT}`, facts)
+    const r = await checkRules(f.ports, opts, '我不是說過要用繁體中文嗎')
+    expect(r.broke).toBe(true)
+    expect(r.context).toContain('- 一律用繁體中文回覆')
+    expect(r.context).not.toContain('不要自己 push')
+    expect(f.reminders).toEqual([{ prompt: '我不是說過要用繁體中文嗎', at: expect.any(Number) }])
+    expect(f.selected()).toBe('__reminder__')
+    expect(f.opened()).toBe(1)
+    // Jev reads the rules, the kept one first
+    const state = (f.jevCalls[0] as { state: string }).state
+    expect(state.indexOf('一律用繁體中文回覆')).toBeLessThan(state.indexOf('不要自己 push'))
+  })
+
+  test('not heard, switched off, or no Jev: nothing happens', async () => {
+    const low = fake({ typesafeKey: 'k', jev: brokeRule(0.2) })
+    expect(await checkRules(low.ports, opts, '幫我加一個測試')).toEqual({ broke: false, context: null })
+    expect(low.opened()).toBe(0)
+
+    const off = fake({ typesafeKey: 'k', jev: brokeRule(0.99) })
+    expect(await checkRules(off.ports, { ...opts, ruleReminder: false }, '怎麼又忘了')).toEqual({ broke: false, context: null })
+    expect(off.jevCalls).toHaveLength(0)
+
+    const noKey = fake({ jev: brokeRule(0.99) })
+    expect(await checkRules(noKey.ports, opts, '怎麼又忘了')).toEqual({ broke: false, context: null })
+    expect(readOptions({}).ruleReminder).toBe(true)
+  })
+
+  test('heard with nothing kept yet: the card still opens, nothing goes along', async () => {
+    const f = fake({ typesafeKey: 'k', jev: brokeRule(0.9) })
+    expect(await checkRules(f.ports, opts, '為什麼又沒跑測試')).toEqual({ broke: true, context: null })
+    expect(f.opened()).toBe(1)
   })
 })

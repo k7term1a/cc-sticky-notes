@@ -161,11 +161,8 @@ test('a pasted 12,000-character question and a 15,000-character answer still dra
   }
 })
 
-test('R4: the project context card shows the digest and edits the facts', async ($, on) => {
-  mock.store(on, {
-    [`digest:${ROOT}:S1`]: { text: '主線在把 auth 改成 session cookie。', turns: 3, at: 1 },
-    [`context:${ROOT}`]: [{ id: 'f1', text: '我們用 session cookie，不用 JWT', at: 1, sessionId: 'S1', source: 'auto' }],
-  })
+test('R4: the digest card shows this session\'s digest', async ($, on) => {
+  mock.store(on, { [`digest:${ROOT}:S1`]: { text: '主線在把 auth 改成 session cookie。', turns: 3, at: 1 } })
   mock.clock(on)
   on('session.id', () => ({ value: 'S1' }))
   on('session.root', () => ({ value: ROOT }))
@@ -174,14 +171,80 @@ test('R4: the project context card shows the digest and edits the facts', async 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
-  expect(await pane.find({ type: 'Button', text: /專案脈絡　1 條/ } as never)).toBeDefined()
   await pane.press({ key: 'open:context' })
   expect(await pane.find({ type: 'Text', text: /^主線在把 auth 改成 session cookie。$/ })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: /每 3 回合背景統整 · Claude/ })).toBeDefined()
-  await pane.input({ key: 'fact-add:1', text: '部署前先跑 migration' })
-  expect(await pane.find({ type: 'Text', text: /^2\. 部署前先跑 migration（手動）$/ })).toBeDefined()
-  await pane.press({ key: 'fact-rm:f1' })
-  expect(await pane.find({ type: 'Text', text: /^1\. 部署前先跑 migration（手動）$/ })).toBeDefined()
+  await pane.unmount()
+})
+
+test('R7: one card per context; ● keeps a rule through compaction; a rule of one\'s own; the reminder card', async ($, on) => {
+  mock.store(on, {
+    [`context:${ROOT}`]: [
+      { id: 'f1', text: '我們用 session cookie，不用 JWT', at: 1, sessionId: 'S1', source: 'auto' },
+      { id: 'f2', text: '不要自己 push', at: 2, sessionId: 'S1', source: 'auto', card: 'git 流程', kind: 'rule' },
+    ],
+  })
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.repo', () => ({ value: null }))
+  on('command.register', () => ({ value: { command: 'sticky-note' } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, ...PANE })
+    expect(await pane.find({ type: 'Text', text: /^2 張 · 2 條$/ })).toBeDefined()
+    expect(await pane.find({ key: 'open:__rule__:git 流程' } as never)).toBeDefined()
+    expect(await pane.find({ key: 'open:__rule__:既有脈絡' } as never)).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: surface === 'terminal' ? /^\[規範\]$/ : /^ 規範 $/ })).toBeDefined()
+    await pane.unmount()
+  }
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  await pane.press({ key: 'open:__rule__:git 流程' } as never)
+  expect(await pane.find({ key: 'keep:f2' } as never)).toMatchObject({ props: { label: '○ 保留' } })
+  await pane.press({ key: 'keep:f2' } as never)
+  expect(await pane.find({ key: 'keep:f2' } as never)).toMatchObject({ props: { label: '● 保留' } })
+  expect(await pane.find({ type: 'Text', text: /^2 張 · 2 條 · 保留 1$/ })).toBeDefined()
+  // added to the open card, and one of its own (a card of its own)
+  await pane.input({ key: 'fact-add:git 流程:1', text: 'commit 訊息用英文' } as never)
+  expect(await pane.find({ type: 'Text', text: /^commit 訊息用英文（手動）$/ })).toBeDefined()
+  await pane.input({ key: 'fact-add:new:3', text: '部署前先跑 migration' } as never)
+  expect(await pane.find({ key: 'open:__rule__:手動加入' } as never)).toBeDefined()
+  await pane.press({ key: 'fact-rm:f2' } as never)
+  expect(await pane.find({ key: 'keep:f2' } as never)).toBeUndefined()
+  await pane.unmount()
+})
+
+test('R7: "you broke a rule" opens the reminder card; 完成 puts it away', async ($, on) => {
+  mock.store(on, { [`context:${ROOT}`]: [{ id: 'f1', text: '一律用繁體中文', at: 1, sessionId: 'S1', source: 'auto', card: '語言', kind: 'habit', keep: true }] })
+  mock.clock(on)
+  on('session.id', () => ({ value: 'S1' }))
+  on('session.root', () => ({ value: ROOT }))
+  on('session.repo', () => ({ value: null }))
+  on('session.messages', () => ({ value: [{ role: 'user', text: '改一下', toolUses: [] }, { role: 'assistant', text: '好了', toolUses: [] }] }) as never)
+  on('env.get', ($, e) => ({ value: e.name === 'TYPESAFE_API_KEY' ? 'test-key' : undefined }) as never)
+  on('fs.read', () => {
+    throw new Error('no file')
+  })
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: '{"answers":{"broke_rule":{"type":"noul","noul":0.95}}}' } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: { command: 'sticky-note' } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  let sent: readonly string[] | undefined
+  on('prompt.submit', ($, e) => {
+    sent = e.context
+    return { text: e.text } as never
+  })
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: '怎麼又用簡體了', origin: { kind: 'composer' } } as never)
+  expect(sent?.join('\n')).toContain('- 一律用繁體中文')
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', ...PANE })
+  expect(await pane.find({ type: 'Text', text: /^哪些規範要在壓縮時保留？$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /怎麼又用簡體了/ })).toBeDefined()
+  expect(await pane.find({ key: 'keep:f1' } as never)).toMatchObject({ props: { label: '● 保留' } })
+  await pane.press({ key: 'reminder-done' } as never)
+  expect(await pane.find({ type: 'Text', text: /^哪些規範要在壓縮時保留？$/ })).toBeUndefined()
   await pane.unmount()
 })
 

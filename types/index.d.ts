@@ -126,6 +126,8 @@ declare module 'claude-code' {
       contextRev: number
       /** R4: the digest run of this session: running now, or when the last one ended and how (in words). */
       digestStatus: { running: boolean; at: number | null; result: string | null }
+      /** R7: the prompt Jev heard "you broke a rule" in; the pane asks which rules compaction keeps until 完成. */
+      reminder: { prompt: string; at: number } | null
       /** Unread sidebar answers since the pane was last opened (badge count). */
       unread: number
       /** "只看本 session" filter. */

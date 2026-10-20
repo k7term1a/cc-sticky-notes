@@ -9,6 +9,7 @@ import { digestDue, FACTS_FOR_JEV, lastExchanges, readDigest, readFacts, runDige
 import { titleAndSummary } from './digest'
 import { getRecord, listRecords, makeRecord, recordId, saveRecord, setChoice } from './feedback'
 import * as jev from './jev'
+import { REMINDER_CARD } from './pane'
 import { markUnsynced, pullNotes, pushNote, type SyncPorts } from './notion'
 import type { Ports } from './ports'
 import { asEffort, claudeProvider } from './providers/claude'
@@ -37,6 +38,8 @@ export type Options = {
   notionDataSource: string
   /** Seconds the dialog waits before the prompt goes to the main line by itself; 0 waits forever. */
   askTimeout: number
+  /** R7: Jev reads each typed prompt for "you broke a rule"; when it says so the pane asks which rules compaction keeps. */
+  ruleReminder: boolean
 }
 
 export function readOptions(o: PluginOptions): Options {
@@ -57,11 +60,12 @@ export function readOptions(o: PluginOptions): Options {
     notionDataSource: typeof o.notionDataSource === 'string' ? o.notionDataSource.trim() : '',
     askTimeout: Math.max(0, Math.floor(num(o.askTimeout, 30))), // 30 s (the developer, 10/14)
     digestEvery: Math.max(0, Math.floor(num(o.digestEvery, 3))), // every 3 turns (the developer's pick, 10/14)
+    ruleReminder: o.ruleReminder !== false, // on (the developer asked for it, 10/20)
   }
 }
 
 /** What /sn provider, /sn every and /sn notion set, kept per machine in $.store over the plugin settings. */
-export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource', 'askTimeout', 'routing', 'notionSync', 'autoOpenPane'] as const
+export const OVERRIDABLE = ['summaryProvider', 'digestEvery', 'notionDataSource', 'askTimeout', 'routing', 'notionSync', 'autoOpenPane', 'ruleReminder'] as const
 export type OverridableField = (typeof OVERRIDABLE)[number]
 export const optionKey = (field: (typeof OVERRIDABLE)[number]) => 'option:' + field
 
@@ -75,7 +79,7 @@ export async function applyOptionOverrides(kv: { get(key: string): Promise<unkno
   if (typeof notion === 'string') opts.notionDataSource = notion
   const timeout = await kv.get(optionKey('askTimeout'))
   if (typeof timeout === 'number' && Number.isInteger(timeout) && timeout >= 0) opts.askTimeout = timeout
-  for (const field of ['routing', 'notionSync', 'autoOpenPane'] as const) {
+  for (const field of ['routing', 'notionSync', 'autoOpenPane', 'ruleReminder'] as const) {
     const v = await kv.get(optionKey(field))
     if (typeof v === 'boolean') opts[field] = v
   }
@@ -393,6 +397,45 @@ export async function digestNow(p: Ports, opts: Options, force = false): Promise
     await p.state.contextChanged()
   }
   return out
+}
+
+/** R7: Jev's probability at or over which a prompt is taken as "you broke a rule". */
+export const BROKE_RULE_AT = 0.7
+/** R7: how long the prompt waits for that answer before going on without it. */
+export const REMINDER_WAIT_MS = 3000
+
+/**
+ * R7: whether the prompt says Claude broke a rule the user set (Jev). When it does,
+ * the pane opens on the rules for the person to mark which ones compaction keeps, and
+ * the ones already marked go along with this prompt (null when none). Never throws;
+ * Jev slow or away, the prompt goes on as it is.
+ */
+export async function checkRules(p: Ports, opts: Options, prompt: string): Promise<{ broke: boolean; context: string | null }> {
+  const none = { broke: false, context: null }
+  if (!opts.ruleReminder) return none
+  const root = await projectKey(p)
+  const facts = await readFacts(p.store, root)
+  const list = await p.messages()
+  const lastTyped = list.filter(isTypedPrompt).at(-1)?.text ?? null
+  const asked = jev.brokeRule(
+    { key: await p.keys.typesafe(), fetch: p.fetch, now: p.now },
+    {
+      lastUser: lastTyped,
+      lastAssistant: list.filter(m => m.role === 'assistant' && m.text !== '').at(-1)?.text ?? null,
+      rules: facts.filter(f => f.keep).concat(facts.filter(f => !f.keep).slice(-FACTS_FOR_JEV)).map(f => f.text),
+      prompt,
+    },
+  )
+  const prob = await Promise.race([asked, p.sleep(REMINDER_WAIT_MS).then(() => null)])
+  if (prob === null || prob < BROKE_RULE_AT) return none
+  await p.state.setReminder({ prompt, at: await p.now() })
+  await p.state.setSelected(REMINDER_CARD)
+  await p.ui.openPane()
+  const kept = facts.filter(f => f.keep)
+  return {
+    broke: true,
+    context: kept.length > 0 ? `The user set these rules for this project; check the last reply against them:\n${kept.map(f => `- ${f.text}`).join('\n')}` : null,
+  }
 }
 
 /** A digest run's outcome in the card's words. */

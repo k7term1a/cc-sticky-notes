@@ -13,6 +13,12 @@
       "default": false,
       "description": "Jev reads each prompt and may ask whether it becomes a sticky note. Off (the default), every prompt goes to the main line; /sn on or the pane's settings card turns it on per machine."
     },
+    "ruleReminder": {
+      "type": "boolean",
+      "title": "Rule reminder",
+      "default": true,
+      "description": "Jev reads each typed prompt for \"you did not follow a rule\"; when it hears one, the pane asks which project rules compaction keeps word for word. Costs one Jev call per prompt."
+    },
     "routeThreshold": {
       "type": "number",
       "title": "Route threshold",

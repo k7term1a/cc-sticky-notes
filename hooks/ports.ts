@@ -65,12 +65,14 @@ export type Ports = {
     contextChanged(): Promise<void>
     /** R4: a digest run started (`result` null) or ended with `result`, shown on the context card. */
     setDigestStatus(running: boolean, result: string | null): Promise<void>
+    /** R7: the prompt that said a rule was broken, shown on the reminder card; null once answered. */
+    setReminder(reminder: { prompt: string; at: number } | null): Promise<void>
   }
   /**
    * This plugin's own userConfig field, as the plugin settings show it: written to
    * settings.json (pluginConfigs) through $.config.set; `deny` when the engine refused.
    */
-  setOption(field: 'summaryProvider' | 'digestEvery' | 'notionDataSource' | 'askTimeout' | 'routing' | 'notionSync' | 'autoOpenPane', value: string | number | boolean): Promise<{ ok: true } | { ok: false; reason: string }>
+  setOption(field: 'summaryProvider' | 'digestEvery' | 'notionDataSource' | 'askTimeout' | 'routing' | 'notionSync' | 'autoOpenPane' | 'ruleReminder', value: string | number | boolean): Promise<{ ok: true } | { ok: false; reason: string }>
   /** Where this runs, for the Notion rows: the repo's git remote, and the computer's name. */
   place(): Promise<{ remote: string | null; machine: string }>
   /** MCP servers the session has (the claude.ai connectors among them), by their tools' names. */

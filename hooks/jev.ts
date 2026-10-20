@@ -148,6 +148,52 @@ export function parseResponse(body: unknown): JevVerdict | null {
   return verdict
 }
 
+/** R7: what the reminder check reads: the last exchange and the new prompt. */
+export type ReminderInput = { lastUser: string | null; lastAssistant: string | null; rules: string[]; prompt: string }
+
+/** R7: one question, asked of every typed prompt: does it say Claude broke a rule the user set? */
+export function buildReminderRequest(input: ReminderInput): unknown {
+  const state = [
+    ...(input.rules.length > 0 ? ['[project rules]', ...input.rules.map(r => `- ${clip(r, 100)}`), ''] : []),
+    '[last exchange]',
+    `user: ${input.lastUser === null ? '(none)' : clip(input.lastUser)}`,
+    `assistant: ${input.lastAssistant === null ? '(none)' : tail(input.lastAssistant)}`,
+    '',
+    '[new prompt]',
+    clip(input.prompt, PROMPT_CLIP),
+  ].join('\n')
+  return {
+    model: JEV_MODEL,
+    state,
+    questions: {
+      broke_rule: {
+        type: 'noul',
+        instructions:
+          'Does the new prompt point out that the assistant broke, forgot or ignored a rule, convention, habit or earlier instruction of the user? ' +
+          'e.g. "為什麼又沒有…", "我不是說過…", "不是說好要…", "you forgot to…", "why didn\'t you follow…"',
+      },
+    },
+  }
+}
+
+/** R7: the probability that the prompt complains a rule was broken; null when Jev could not say. Never throws. */
+export async function brokeRule(d: JevDeps, input: ReminderInput): Promise<number | null> {
+  const key = d.key
+  if (!key) return null
+  try {
+    const r = await d.fetch(JEV_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify(buildReminderRequest(input)),
+    })
+    if (!r.ok) return null
+    const noul = (JSON.parse(r.text) as { answers?: { broke_rule?: { noul?: unknown } } } | null)?.answers?.broke_rule?.noul
+    return typeof noul === 'number' ? noul : null
+  } catch {
+    return null
+  }
+}
+
 export type JevResult =
   | { ok: true; verdict: JevVerdict; ms: number }
   | { ok: false; reason: 'no-key' | 'http' | 'bad-response' | 'network'; status?: number; ms: number }

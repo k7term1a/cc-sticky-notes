@@ -4,9 +4,9 @@ import type { EngineInterface, HttpResponse, Register } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
 import { COMMAND, COMMAND_SPEC, maskNewArgs, runCommand, SHORT_COMMAND, SHORT_COMMAND_SPEC } from './commands'
-import { applyOptionOverrides, syncing, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
+import { applyOptionOverrides, checkRules, syncing, change, confirmDelete, digestNow, syncPull, optionKey, projectKey, explainDrop, prepare, readOptions, recordFeedback, routePrompt, startNote, type Options } from './notes'
 import { PANE_ID, PANE_TITLE, paneView } from './pane'
-import { addFacts, contextKey, readDigest, readFacts, type ContextFact } from './context'
+import { addFacts, compactInstructions, contextKey, MANUAL_CARD, readDigest, readFacts, rulesBlock, type ContextFact } from './context'
 import type { Ports } from './ports'
 import { describeKey, findKey, keyFiles, resolveKey } from './secrets'
 import { setActive } from './tree'
@@ -18,6 +18,7 @@ const selectedAtom = atom({ plugin: 'cc-sticky-notes', key: 'selectedId' } as co
 const editingAtom = atom({ plugin: 'cc-sticky-notes', key: 'editingId' } as const, null)
 const contextRevAtom = atom({ plugin: 'cc-sticky-notes', key: 'contextRev' } as const, 0)
 const digestStatusAtom = atom({ plugin: 'cc-sticky-notes', key: 'digestStatus' } as const, { running: false, at: null, result: null })
+const reminderAtom = atom({ plugin: 'cc-sticky-notes', key: 'reminder' } as const, null)
 const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0)
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
@@ -161,6 +162,7 @@ function portsOf($: EngineInterface): Ports {
       contextChanged: async () => void (await update($, contextRevAtom, n => n + 1)),
       setDigestStatus: async (running, result) =>
         void (await update($, digestStatusAtom, s => (running ? { ...s, running: true } : { running: false, at: Date.now(), result }))),
+      setReminder: async reminder => void (await update($, reminderAtom, () => reminder)),
     },
   }
 }
@@ -189,14 +191,16 @@ async function contextData($: EngineInterface, opts: Options) {
       digestEvery: opts.digestEvery,
       askTimeout: opts.askTimeout,
       provider: opts.summaryProvider,
+      ruleReminder: opts.ruleReminder,
     },
+    reminder: await read($, reminderAtom),
   }
   try {
     const p = portsOf($)
     const root = await projectKey(p)
     const facts = await readFacts(p.store, root)
     const digest = (await readDigest(p.store, root, await p.sessionId()))?.text ?? null
-    return { ...how, digest, facts: facts.map(f => ({ id: f.id, text: f.text, source: f.source })) }
+    return { ...how, digest, facts: facts.map(({ sessionId: _, ...f }) => f) }
   } catch {
     // never let the context card refuse the whole pane
     return { ...how, digest: null, facts: [] }
@@ -237,6 +241,9 @@ async function followUp($: EngineInterface, opts: Options, parentId: string, que
     route: { label: 'sidebar_knowledge', confidence: 1, source: 'manual' },
   })
 }
+
+/** R7: how long a compaction waits for the rules to be gathered from what it is about to drop. */
+const COMPACT_DIGEST_WAIT_MS = 30000
 
 /** The session's options, for refreshStatus (outside register's closure). */
 let currentOpts: Options = readOptions({})
@@ -296,11 +303,18 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     // Only the person's own typed prompts are routed; notifications, peers and plugins pass.
     if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)
+    if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
+    const p = portsOf($)
+
+    // R7: "you broke a rule" (Jev): the pane asks which rules compaction keeps; the kept ones go
+    // with this prompt, which stays on the main line whatever the routing says
+    const rules = await checkRules(p, opts, e.text)
+    if (rules.context !== null) e = { ...e, context: [...(e.context ?? []), rules.context] }
+    if (rules.broke) return next(e)
+
     // the mod's main switch (/sn off, the settings card): everything to the main line, no Jev
     if (!opts.routing) return next(e)
-    if (e.text.trim() === '' || e.text.trimStart().startsWith('/')) return next(e)
 
-    const p = portsOf($)
     const routed = await routePrompt(p, opts, e.text, { remote: e.origin.kind === 'bridge' })
     const keep = (nodeId: string | null) => p.later(() => void recordFeedback(p, opts, e.text, routed, nodeId))
     const d = routed.decision
@@ -328,6 +342,37 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // R7: before the main line is compacted, the rules in what is about to go are gathered (a digest
+  // run, if anything is new since the last), and the summarizer is told to leave them to the
+  // rules block, except the kept ones, word for word
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const p = portsOf($)
+    try {
+      const root = await projectKey(p)
+      const last = await readDigest(p.store, root, await p.sessionId())
+      if (opts.digestEvery > 0 && (last === null || last.turns < (await p.turns()))) {
+        await Promise.race([digestNow(p, opts, true), p.sleep(COMPACT_DIGEST_WAIT_MS)])
+      }
+      const instructions = compactInstructions(await readFacts(p.store, root), e.instructions)
+      return next(instructions === undefined ? e : { ...e, instructions })
+    } catch (err) {
+      p.ui.log(`sticky-notes: compaction left as it was given (${String(err).slice(0, 200)})`, 'debug')
+      return next(e)
+    }
+  })
+
+  // R7: the rules reach a new session's first request and the first after each compaction
+  on('prompt.context', async ($, e, next) => {
+    try {
+      const block = rulesBlock(await readFacts(kvOf($), await projectKey(portsOf($))))
+      if (block !== null) return next({ ...e, blocks: [...e.blocks, { name: 'projectRules', text: block }] })
+    } catch (err) {
+      $.ui.log(`sticky-notes: no rules block (${String(err).slice(0, 200)})`, { to: 'debug' })
+    }
+    return next(e)
+  })
+
   on('command.run', { command: COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
   // /sn: the keyboard shortcut for the pane (the status line cannot be clicked; PROBE.md)
   on('command.run', { command: SHORT_COMMAND }, async ($, e) => runCommand(portsOf($), opts, e.args))
@@ -348,9 +393,18 @@ export const register: Register = (on, options) => {
       followUp: (parentId, question) => void followUp($, opts, parentId, question),
       rewrite: (nodeId, question) => void rewrite($, opts, nodeId, question),
       remove: nodeId => void confirmDelete(portsOf($), opts, nodeId),
-      addFact: text =>
-        void $.session.id().then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual' }]))),
+      addFact: (text, card) =>
+        void $.session
+          .id()
+          .then(sessionId => editFacts($, facts => addFacts(facts, [{ id: crypto.randomUUID(), text, at: Date.now(), sessionId, source: 'manual', card: card ?? MANUAL_CARD }]))),
       removeFact: id => void editFacts($, facts => facts.filter(f => f.id !== id)),
+      // R7: kept word for word through compaction, or not
+      toggleKeep: id => void editFacts($, facts => facts.map(f => (f.id === id ? { ...f, keep: !f.keep } : f))),
+      doneReminder: () =>
+        void (async () => {
+          await update($, reminderAtom, () => null)
+          await selectNode($, null)
+        })(),
       // the card itself shows 統整中… and then the outcome (digestStatus)
       refreshDigest: () => {
         const p = portsOf($)
