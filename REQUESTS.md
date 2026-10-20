@@ -198,3 +198,34 @@ Desktop session 裡 mod 呼叫 claude.ai connector 是否可行、Notion connect
 ### 還不知道
 
 Jev 對中文、8 個選項的 `continues` 準確度。回饋紀錄還沒記 Jev 選了哪張、你最後接在哪張；要校正時再加。
+
+---
+
+## R7｜專案脈絡卡：壓縮與開新 session 時參考的習慣／規範（10/20 提出）
+
+### 背景
+
+Desktop 把 side chat 改成常駐，「旁問不進主線」這件事被內建功能取代了。方向改成做上下文管理的小工具，參考 mattpocock 的 handoff skill：把對話寫成交接文件，讓下一個 agent 接手；已經寫在 spec、plan、commit 裡的內容不重寫，只附位置；去掉金鑰等敏感資料；交接時要寫下一段要做什麼。
+
+### 需求
+
+沿用「跟專案進度無關的內容拉出主對話」的概念，維護「這個專案的習慣／規範／注意事項」。
+
+- 跟 CLAUDE.md 不同：像便利貼，一個脈絡一張卡。
+- 壓縮時參考這些卡，摘要只留進度。
+- 開同專案的新 session 時，透過這些卡知道整個專案在做什麼、要注意什麼。
+
+### 可行性（2.1.299 types 已確認）
+
+- **`session.compact`**：所有壓縮都會觸發，包括手動 `/compact`、自動門檻、plugin 呼叫，以及預先計算的 `precompute`。hook 能改 `instructions`（叫摘要器保留或略過什麼）、改要摘要的 `messages`、自己回一份 `{ messages }` 取代摘要，或回 `{ skip }` 不壓縮。`e.messages` 是整段即將被壓掉的對話，可以在這個時間點抽卡。
+- **`prompt.context`**：在對話的第一則 user 訊息前面加一個自訂區塊（例如 `# projectContext`）。引擎會在兩個時間點各送一份：新 session 的第一次請求，和每次壓縮之後。新 session 跟壓縮後重新注入，這一個 hook 都包了。之後要改內容，用 `$.ui.invalidate("prompt.context")`。
+- **`$.session.compact({ instructions })`**：mod 自己也能觸發壓縮，可以拿來做 `/sn handoff <下一段要做什麼>`。
+- 已經有的部分：
+  - R4 的 facts（`context:<root>`，只會增加）和 digest；
+  - pane 卡片 UI；
+  - Notion 跨電腦同步；
+  - 每 n 回合背景統整。
+
+### 待決定
+
+見 10/20 對話：卡片自動加還是先確認、摘要的處理方式、注入多少、舊的便利貼路由怎麼處理。
