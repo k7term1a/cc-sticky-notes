@@ -35,15 +35,16 @@ describe('rule cards', () => {
     expect(rulesBlock(many)!.length).toBeLessThanOrEqual(RULES_BUDGET)
   })
 
-  test('compaction: told to leave the rules to the block, and to copy the kept ones', () => {
+  test('compaction: handed every rule to keep the ones the work needs, and the kept ones word for word', () => {
     expect(compactInstructions([], 'the plan')).toBe('the plan')
-    const plain = compactInstructions([fact('1', 'x')], undefined)!
-    expect(plain).toContain("spend the summary on the task's progress")
-    expect(plain).not.toContain('Project rules')
+    const plain = compactInstructions([fact('1', 'x', { card: 'git', kind: 'rule' })], undefined)!
+    expect(plain).toContain('keep the ones that bear on the work still in progress')
+    expect(plain).toContain('## git\n- [規範] x')
+    expect(plain).not.toContain('word for word')
     const kept = compactInstructions([fact('1', 'x'), fact('2', '一律用繁體中文', { keep: true })], 'the plan')!
     expect(kept.startsWith('the plan\n\n')).toBe(true)
-    expect(kept).toContain('"Project rules":\n- 一律用繁體中文')
-    expect(kept).not.toContain('- x')
+    expect(kept).toContain('word for word under that heading whatever the work:\n- 一律用繁體中文')
+    expect(kept.match(/一律用繁體中文/g)).toHaveLength(1) // not listed twice
   })
 
   test('Jev is asked one question about the prompt, with the rules and the last exchange', () => {
@@ -58,20 +59,41 @@ describe('rule cards', () => {
 describe('the hooks', () => {
   const rules = [fact('1', '不要自己 push', { card: 'git', kind: 'rule' }), fact('2', '一律用繁體中文', { card: '語言', kind: 'habit', keep: true })]
 
-  test('a new conversation (and one just compacted) carries the rules block', async ($, on) => {
+  test('a new session carries the rules block', async ($, on) => {
     mock.store(on, { [`context:${ROOT}`]: rules })
+    on('session.id', () => ({ value: 'S1' }))
     on('session.root', () => ({ value: ROOT }))
     on('session.repo', () => ({ value: null }))
+    on('session.messages', () => ({ value: [{ role: 'user', text: '開始', toolUses: [] }] }) as never)
     on('prompt.context', ($, e) => ({ blocks: e.blocks }))
     const r = await $.prompt.context({ blocks: [{ name: 'currentDate', text: 'today' }] })
     expect(r.blocks.map(b => b.name)).toEqual(['currentDate', 'projectRules'])
     expect(r.blocks[1]!.text).toContain('- [習慣] 一律用繁體中文')
   })
 
-  test('no rules, no block', async ($, on) => {
-    mock.store(on)
+  test('a resumed session (replies in it already) and one just compacted carry none', async ($, on) => {
+    mock.store(on, { [`context:${ROOT}`]: rules })
+    on('session.id', () => ({ value: 'S1' }))
     on('session.root', () => ({ value: ROOT }))
     on('session.repo', () => ({ value: null }))
+    on('session.turns', () => ({ value: 0 }))
+    let messages = [{ role: 'user', text: 'q', toolUses: [] }, { role: 'assistant', text: 'a', toolUses: [] }]
+    on('session.messages', () => ({ value: messages }) as never)
+    on('prompt.context', ($, e) => ({ blocks: e.blocks }))
+    on('session.compact', ($, e) => ({ messages: e.messages }))
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+    // compacted: the summary alone is left, no reply, and still no block
+    await $.session.compact({ trigger: 'manual', messages: ONE })
+    messages = [{ role: 'user', text: 'summary', toolUses: [] }]
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
+  })
+
+  test('no rules, no block', async ($, on) => {
+    mock.store(on)
+    on('session.id', () => ({ value: 'S1' }))
+    on('session.root', () => ({ value: ROOT }))
+    on('session.repo', () => ({ value: null }))
+    on('session.messages', () => ({ value: [] }) as never)
     on('prompt.context', ($, e) => ({ blocks: e.blocks }))
     expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
   })
@@ -90,7 +112,8 @@ describe('the hooks', () => {
     })
     await $.session.compact({ trigger: 'manual', messages: ONE, instructions: 'keep the plan' })
     expect(told).toContain('keep the plan')
-    expect(told).toContain('"Project rules":\n- 一律用繁體中文')
+    expect(told).toContain('whatever the work:\n- 一律用繁體中文')
+    expect(told).toContain('## git\n- [規範] 不要自己 push')
   })
 
   test('a subagent\'s compaction is left alone', async ($, on) => {

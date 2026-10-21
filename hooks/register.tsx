@@ -19,6 +19,7 @@ const editingAtom = atom({ plugin: 'cc-sticky-notes', key: 'editingId' } as cons
 const contextRevAtom = atom({ plugin: 'cc-sticky-notes', key: 'contextRev' } as const, 0)
 const digestStatusAtom = atom({ plugin: 'cc-sticky-notes', key: 'digestStatus' } as const, { running: false, at: null, result: null })
 const reminderAtom = atom({ plugin: 'cc-sticky-notes', key: 'reminder' } as const, null)
+const compactedInAtom = atom({ plugin: 'cc-sticky-notes', key: 'compactedIn' } as const, null)
 const unreadAtom = atom({ plugin: 'cc-sticky-notes', key: 'unread' } as const, 0)
 const pendingAtom = atom({ plugin: 'cc-sticky-notes', key: 'pending' } as const, 0)
 const lastTurnAtom = atom({ plugin: 'cc-sticky-notes', key: 'lastTurnId' } as const, null)
@@ -343,11 +344,12 @@ export const register: Register = (on, options) => {
   })
 
   // R7: before the main line is compacted, the rules in what is about to go are gathered (a digest
-  // run, if anything is new since the last), and the summarizer is told to leave them to the
-  // rules block, except the kept ones, word for word
+  // run, if anything is new since the last), and the summarizer is handed them all to keep the
+  // ones the work in progress needs, the kept ones word for word: the summary carries them on
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const p = portsOf($)
+    let given = e
     try {
       const root = await projectKey(p)
       const last = await readDigest(p.store, root, await p.sessionId())
@@ -355,16 +357,25 @@ export const register: Register = (on, options) => {
         await Promise.race([digestNow(p, opts, true), p.sleep(COMPACT_DIGEST_WAIT_MS)])
       }
       const instructions = compactInstructions(await readFacts(p.store, root), e.instructions)
-      return next(instructions === undefined ? e : { ...e, instructions })
+      if (instructions !== undefined) given = { ...e, instructions }
     } catch (err) {
       p.ui.log(`sticky-notes: compaction left as it was given (${String(err).slice(0, 200)})`, 'debug')
-      return next(e)
     }
+    const r = await next(given)
+    if (r.skip === undefined && e.trigger !== 'precompute') {
+      const sessionId = await p.sessionId()
+      await update($, compactedInAtom, () => sessionId)
+    }
+    return r
   })
 
-  // R7: the rules reach a new session's first request and the first after each compaction
+  // R7: the rules reach a new session's first request only (the developer, 10/21): a resumed
+  // conversation still holds what they came from, and a compacted one has them in its summary
   on('prompt.context', async ($, e, next) => {
     try {
+      if ((await read($, compactedInAtom)) === (await $.session.id())) return next(e)
+      const list = await $.session.messages()
+      if (Array.isArray(list) && list.some(m => m.role === 'assistant')) return next(e)
       const block = rulesBlock(await readFacts(kvOf($), await projectKey(portsOf($))))
       if (block !== null) return next({ ...e, blocks: [...e.blocks, { name: 'projectRules', text: block }] })
     } catch (err) {

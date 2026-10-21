@@ -128,6 +128,8 @@ declare module 'claude-code' {
       digestStatus: { running: boolean; at: number | null; result: string | null }
       /** R7: the prompt Jev heard "you broke a rule" in; the pane asks which rules compaction keeps until 完成. */
       reminder: { prompt: string; at: number } | null
+      /** R7: the session last compacted here: its next context is not a new session's, no rules block. */
+      compactedIn: string | null
       /** Unread sidebar answers since the pane was last opened (badge count). */
       unread: number
       /** "只看本 session" filter. */

@@ -7,9 +7,9 @@
 //   $.store context:<root>             → ContextFact[]   (one per project, every session adds to it)
 //
 // R7 (10/20): each fact sits on a card (one context, one card, like a sticky note) and has
-// a kind (規範 / 習慣 / 注意 / 決策). The ones marked `keep` go into the compaction summary
-// word for word; all of them are sent again at a new session and after each compaction
-// (register.tsx prompt.context), as many as RULES_BUDGET holds.
+// a kind (規範 / 習慣 / 注意 / 決策). A new session reads them all (register.tsx prompt.context),
+// as many as RULES_BUDGET holds; a compaction's summarizer is handed them to keep the ones the
+// work in progress needs, and the ones marked `keep` word for word (the developer, 10/21).
 import type { SummaryProvider } from './providers/types'
 import type { KV } from './ports'
 import { LANGUAGE_RULE } from './digest'
@@ -240,19 +240,21 @@ export async function runDigest(
 export const RULES_BUDGET = 4000
 
 /**
- * The project's rules as a new session and a compacted one read them: the kept ones
- * first and whole, then every card's facts, newest card first, while RULES_BUDGET lasts.
- * Null when there are none.
+ * The project's rules as a new session reads them: the kept ones first and whole, then
+ * every card's facts, newest card first, while RULES_BUDGET lasts. Null when there are none.
  */
 export function rulesBlock(facts: readonly ContextFact[]): string | null {
   if (facts.length === 0) return null
   const kept = facts.filter(f => f.keep)
-  const lines = [
-    'Rules, habits and decisions of this project, kept by the cc-sticky-notes mod across sessions and compactions. Follow them unless the user says otherwise.',
-  ]
+  const lines = ['Rules, habits and decisions of this project, kept by the cc-sticky-notes mod across sessions. Follow them unless the user says otherwise.']
   if (kept.length > 0) lines.push('', 'Must follow (the user marked these):', ...kept.map(f => `- [${kindWord(f.kind)}] ${f.text}`))
-  let budget = RULES_BUDGET - lines.join('\n').length
-  for (const c of cardsOf(facts.filter(f => !f.keep))) {
+  return [...lines, ...cardLines(facts.filter(f => !f.keep), RULES_BUDGET - lines.join('\n').length)].join('\n')
+}
+
+/** Every card's facts under its title, newest card first, while `budget` characters last. */
+function cardLines(facts: readonly ContextFact[], budget: number): string[] {
+  const lines: string[] = []
+  for (const c of cardsOf(facts)) {
     const card = [`## ${c.title}`]
     let used = card[0]!.length + 2
     for (const f of c.facts) {
@@ -265,16 +267,22 @@ export function rulesBlock(facts: readonly ContextFact[]): string | null {
     lines.push('', ...card)
     budget -= used
   }
-  return lines.join('\n')
+  return lines
 }
 
-/** What the summarizer is told on top of what it was given (session.compact): the kept rules word for word, the rest left to the block. */
+/**
+ * What the summarizer is told on top of what it was given (session.compact): the summary
+ * is all that carries the rules on (the block is a new session's only, 10/21), so it keeps
+ * the ones that bear on the work still in progress, and the kept ones word for word.
+ */
 export function compactInstructions(facts: readonly ContextFact[], given: string | undefined): string | undefined {
   if (facts.length === 0) return given
   const kept = facts.filter(f => f.keep)
   const ours = [
-    "This project's rules, habits and decisions are kept by a tool and sent again after this compaction: spend the summary on the task's progress, not on restating them.",
-    ...(kept.length > 0 ? ['Except these, which the user marked: copy them word for word under a heading "Project rules":', ...kept.map(f => `- ${f.text}`)] : []),
+    'Below are the rules, habits and decisions of this project (kept by the cc-sticky-notes mod). Under a heading "Project rules" in the summary, ' +
+      'keep the ones that bear on the work still in progress, briefly, and any the conversation showed the assistant getting wrong; leave out the rest.',
+    ...(kept.length > 0 ? ['', 'Copy these, which the user marked, word for word under that heading whatever the work:', ...kept.map(f => `- ${f.text}`)] : []),
+    ...cardLines(facts.filter(f => !f.keep), RULES_BUDGET),
   ].join('\n')
   return given !== undefined && given.trim() !== '' ? `${given}\n\n${ours}` : ours
 }

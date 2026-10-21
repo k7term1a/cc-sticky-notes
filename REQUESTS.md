@@ -235,8 +235,11 @@ Desktop 把 side chat 改成常駐，「旁問不進主線」這件事被內建�
 
 - **資料**：沿用 R4 的 `context:<root>`，每條多三個欄位：`card`（脈絡卡名稱）、`kind`（rule / habit / caution / decision）、`keep`（壓縮時原文保留）。R4 留下的舊條目放在「既有脈絡」卡。上限從 60 條改成 120 條；超過時刪最舊的自動條目，`keep` 的不刪。
 - **整理**：digest 的 prompt 改成產出 `{card, kind, text}`，有相同脈絡就沿用既有卡名，沒有就開新卡。`session.compact` 前，如果上次統整之後主線有新回合，先強制統整一次，最多等 30 秒。
-- **注入**：`prompt.context` 加一個 `projectRules` 區塊，`keep` 的放最前面而且完整，其餘從最近的卡開始放，總共最多 4000 字。新 session 跟每次壓縮後，引擎各送一次。
-- **壓縮**：`session.compact` 在原本的 instructions 後面加一段：規範另外保存，摘要只寫進度；`keep` 的規範原文寫在「Project rules」標題下。subagent 的壓縮不改。
+- **注入**（10/21 改）：只有全新 session 才送。`prompt.context` 加一個 `projectRules` 區塊，`keep` 的放最前面而且完整，其餘從最近的卡開始放，總共最多 4000 字。
+  - 不送 resume 的 session：判斷方式是對話裡已經有 assistant 回覆。
+  - 不送壓縮後的 session：判斷方式是這個 session 剛被 mod 看到壓縮過（atom `compactedIn`）。
+  - 原因（你 10/21 的判斷）：對話還在上下文裡時，再送一份只是重複。10/21 實測過，這個區塊確實會出現在模型的上下文裡；那次是在 resume 時送的，就是重複的情況。
+- **壓縮**（10/21 改）：`session.compact` 在原本的 instructions 後面附上所有規範（以卡分組，最多 4000 字），請摘要器在「Project rules」標題下，保留和進行中工作相關的，以及對話裡 Claude 做錯過的。`keep` 的不管相不相關都原文寫進去。壓縮後規範只靠摘要延續。subagent 的壓縮不改。
 - **提醒**：每句打字的 prompt 都另外問 Jev 一題 `broke_rule`（noul）。這一題跟自動判斷的開關無關，設定項是 `ruleReminder`，預設開。≥ 0.7 時：
   - pane 打開「哪些規範要在壓縮時保留？」卡片；
   - 已經 `keep` 的規範附在這句話的 context 一起送出；
